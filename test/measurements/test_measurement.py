@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 import numpy as np
 import pytest
 from pennylane.wires import Wires
@@ -14,6 +12,7 @@ from hybridlane.measurements import (
 from hybridlane.sa.base import BasisSchema, ComputationalBasis
 
 
+@pytest.mark.unit
 class TestBasisSchema:
     def test_init(self):
         wire_map = {
@@ -49,6 +48,7 @@ class TestBasisSchema:
         assert schema1 != schema2
 
 
+@pytest.mark.unit
 class TestSampleResult:
     def test_init_basis_states(self):
         basis_states = {"a": np.array([1, 0]), "b": np.array([0, 1])}
@@ -77,6 +77,7 @@ class TestSampleResult:
         assert result3.shots == 2
 
 
+@pytest.mark.unit
 class TestCountsResult:
     def test_init_basis_states(self):
         counts = {(0, 1): 10, (1, 0): 20}
@@ -97,6 +98,7 @@ class TestCountsResult:
         assert result.shots == 40
 
 
+@pytest.mark.unit
 class TestFockTruncation:
     def test_shape(self):
         schema = BasisSchema(

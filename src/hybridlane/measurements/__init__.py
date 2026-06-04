@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 from ..sa import BasisSchema, ComputationalBasis
 from .base import (
     CountsResult,
@@ -16,6 +14,7 @@ from .counts import CountsMP
 from .expectation import ExpectationMP, expval
 from .probability import ProbabilityMP
 from .sample import SampleMP, sample
+from .state import state
 from .variance import VarianceMP, var
 
 __all__ = [
@@ -36,4 +35,5 @@ __all__ = [
     "expval",
     "var",
     "sample",
+    "state",
 ]

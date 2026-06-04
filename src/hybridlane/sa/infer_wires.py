@@ -1,15 +1,18 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 import functools
 from collections import OrderedDict
 from typing import Hashable
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.measurements import MeasurementProcess
-from pennylane.operation import CV, Operator
-from pennylane.ops import CompositeOp, Controlled, ControlledOp, SymbolicOp
+from pennylane.operation import CVObservable, CVOperation, Operator
+from pennylane.ops import (
+    CompositeOp,
+    Controlled,
+    ControlledOp,
+    SymbolicOp,
+)
 from pennylane.tape import QuantumScript
 from pennylane.typing import TensorLike
 from pennylane.wires import WiresLike
@@ -116,7 +119,13 @@ def _infer_wire_types_from_operator(op: Operator) -> dict[WiresLike, WireType]:
 
 
 @_infer_wire_types_from_operator.register
-def _(op: CV):
+def _(_: qp.Identity | qp.Snapshot | qp.GlobalPhase):
+    # None of these gates add any constraints on wire types
+    return {}
+
+
+@_infer_wire_types_from_operator.register
+def _(op: CVOperation | CVObservable):
     return {w: Qumode() for w in op.wires}
 
 
@@ -139,6 +148,12 @@ def _(op: CompositeOp):
 def _(op: Controlled | ControlledOp | QubitConditioned):
     wire_types = {w: Qubit() for w in op.control_wires}
     wire_types |= _infer_wire_types_from_operator(op.base)
+    return wire_types
+
+
+@_infer_wire_types_from_operator.register
+def _(op: qp.BasisState | qp.StatePrep | qp.Superposition):
+    wire_types = {w: Qubit() for w in op.wires}
     return wire_types
 
 
@@ -241,7 +256,7 @@ def infer_schema_from_tensors(tensors: dict[Hashable, TensorLike]) -> BasisSchem
     """
     wire_map = {}
     for wire, tensor in tensors.items():
-        dtype: str = qml.math.get_dtype_name(tensor)
+        dtype: str = qp.math.get_dtype_name(tensor)
 
         if dtype.startswith("int") or dtype.startswith("uint"):
             basis = ComputationalBasis.Discrete

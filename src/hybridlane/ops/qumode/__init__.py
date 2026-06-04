@@ -1,8 +1,6 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
-from .non_parametric_ops import F, Fourier, ModeSwap
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
+from .non_parametric_ops import A, Ad, AnnihilationOp, CreationOp, F, Fourier, ModeSwap
 from .observables import (
     FockStateProjector,
     N,
@@ -22,6 +20,7 @@ from .parametric_ops_multi_qumode import (
     TwoModeSum,
 )
 from .parametric_ops_single_qumode import (
+    SNAP,
     C,
     CubicPhase,
     D,
@@ -31,6 +30,7 @@ from .parametric_ops_single_qumode import (
     R,
     Rotation,
     S,
+    SelectiveNumberArbitraryPhase,
     Squeezing,
 )
 
@@ -38,6 +38,10 @@ __all__ = [
     "Fourier",
     "F",
     "ModeSwap",
+    "AnnihilationOp",
+    "A",
+    "CreationOp",
+    "Ad",
     "FockStateProjector",
     "N",
     "NumberOperator",
@@ -62,4 +66,6 @@ __all__ = [
     "K",
     "CubicPhase",
     "C",
+    "SNAP",
+    "SelectiveNumberArbitraryPhase",
 ]

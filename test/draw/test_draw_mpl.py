@@ -1,34 +1,39 @@
-# Copyright (c) 2025, Battelle Memorial Institute
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
-
-import pennylane as qml
+import pennylane as qp
 import pytest
 
 mpl = pytest.importorskip("matplotlib")
 plt = pytest.importorskip("matplotlib.pyplot")
 patches = pytest.importorskip("matplotlib.patches")
 
-import hybridlane as hqml  # noqa: E402
-from hybridlane.drawer.tape_mpl import default_qubit_color, default_qumode_color  # noqa: E402
+import hybridlane as hl  # noqa: E402
 from hybridlane.drawer.mpldrawer import icon_face_color  # noqa: E402
+from hybridlane.drawer.tape_mpl import (  # noqa: E402
+    default_qubit_color,
+    default_qumode_color,
+)
 
 
-dev = qml.device("bosonicqiskit.hybrid", max_fock_level=8)
+def get_circuit1():
+    dev = qp.device("bosonicqiskit.hybrid", max_fock_level=8)
+
+    @qp.qnode(dev)
+    def circuit1(n):
+        qp.H(0)
+        hl.Rotation(0.5, 1)
+
+        for i in range(n):
+            hl.ConditionalDisplacement(0.5, 0, [0, 2 + i])
+
+        return hl.expval(hl.NumberOperator(n))
+
+    return circuit1
 
 
-@qml.qnode(dev)
-def circuit1(n):
-    qml.H(0)
-    hqml.Rotation(0.5, 1)
-
-    for i in range(n):
-        hqml.ConditionalDisplacement(0.5, 0, [0, 2 + i])
-
-    return hqml.expval(hqml.NumberOperator(n))
-
-
+@pytest.mark.bq
+@pytest.mark.unit
 class TestIconBehavior:
     def test_icon_colors(self):
         icon_colors = {
@@ -39,7 +44,8 @@ class TestIconBehavior:
             6: "turquoise",
         }
 
-        fig, ax = hqml.draw_mpl(
+        circuit1 = get_circuit1()
+        fig, ax = hl.draw_mpl(
             circuit1,
             wire_icon_colors=icon_colors,
         )(5)

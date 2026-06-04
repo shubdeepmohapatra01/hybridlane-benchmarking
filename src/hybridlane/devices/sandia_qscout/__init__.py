@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 r"""Module for all QSCOUT-related functionality :footcite:p:`clark2021engineering`
 
@@ -25,15 +23,15 @@ Example with hardware wires:
 
 .. code:: python
 
-    dev = qml.device("sandiaqscout.hybrid", use_virtual_wires=False, n_qubits=4)
+    dev = qp.device("sandiaqscout.hybrid", use_virtual_wires=False, n_qubits=4)
 
-    @qml.set_shots(10)
-    @qml.qnode(dev)
+    @qp.set_shots(10)
+    @qp.qnode(dev)
     def circuit():
-        hqml.FockState(3, [0, "m1i2"])
-        return hqml.expval(qml.Z(0))
+        hl.FockState(3, [0, "m1i2"])
+        return hl.expval(qp.Z(0))
 
-    print(qml.draw(circuit)())
+    print(qp.draw(circuit)())
 
 When using hardware wires, the user is responsible for ensuring that gates adhere to
 any constraints. Additionally, for optimal performance, the qubits and qumodes should
@@ -49,16 +47,16 @@ Example with virtual wires:
 
 .. code:: python
 
-    qml.decomposition.enable_graph()
-    dev = qml.device("sandiaqscout.hybrid", n_qubits=4)
+    qp.decomposition.enable_graph()
+    dev = qp.device("sandiaqscout.hybrid", n_qubits=4)
 
-    @qml.set_shots(10)
-    @qml.qnode(dev)
+    @qp.set_shots(10)
+    @qp.qnode(dev)
     def circuit():
-        hqml.FockState(3, ["q", "m"])
-        return hqml.expval(qml.Z("q"))
+        hl.FockState(3, ["q", "m"])
+        return hl.expval(qp.Z("q"))
 
-    print(qml.draw(circuit, level="device")())
+    print(qp.draw(circuit, level="device")())
 
 Note that virtual wire allocation does not yet perform any ranking for valid solutions
 or noise-aware compilation.
@@ -85,12 +83,12 @@ Example:
 
 .. code:: python
 
-    dev = qml.device("sandiaqscout.hybrid", n_qubits=2)
+    dev = qp.device("sandiaqscout.hybrid", n_qubits=2)
 
-    @qml.set_shots(1024)
-    @qml.qnode(dev)
+    @qp.set_shots(1024)
+    @qp.qnode(dev)
     def circuit(alpha):
-        hqml.SqueezedCatState(alpha, np.pi / 2, parity="even", wires=["q", "m1i1"])
+        hl.SqueezedCatState(alpha, np.pi / 2, parity="even", wires=["q", "m1i1"])
 
     to_jaqal(circuit, level="device", precision=4)(4)
 
@@ -99,14 +97,14 @@ subcircuit.
 
 .. code::
 
-    from qscout.v1.std usepulses *
+    from Calibration_PulseDefinitions.QubitBosonPulses usepulses *
 
     register q[2]
 
-    subcircuit 1024 {
+    subcircuit {
         xCD q[1] 1 1 4.0 0.0
         Rz q[1] 11.00
-        xCD q[1] 1 1 0.00000000000000001803 0.09817
+        xCD q[1] 1 1 0.0 0.09817
         yCD q[1] 1 1 -0.09817 -0.0
         Sz q[1]
     }

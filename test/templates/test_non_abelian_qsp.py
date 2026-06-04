@@ -1,16 +1,14 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 import itertools
 
-import pennylane as qml
+import pennylane as qp
 import pennylane.numpy as np
 import pytest
 from scipy.special import gammaln
 
-import hybridlane as hqml
+import hybridlane as hl
 from hybridlane.templates.non_abelian_qsp import GKPState, SqueezedCatState
 
 
@@ -26,22 +24,24 @@ def cat_state_probs(alpha, ns, odd: bool):
 
 
 @pytest.mark.slow
+@pytest.mark.bq
 class TestSqueezedCatState:
+    @pytest.mark.integration
     @pytest.mark.parametrize(
         "alpha,parity", itertools.product([3, 4, 5, 6], ("even", "odd"))
     )
     def test_parity(self, alpha, parity):
         fock_level = 256
-        dev = qml.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
+        dev = qp.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
 
-        @qml.qnode(dev)
+        @qp.qnode(dev)
         def circuit(alpha):
             SqueezedCatState(alpha, np.pi / 2, parity=parity, wires=["q", "m"])
 
-            qml.H("a")
-            hqml.ConditionalParity(["a", "m"])
-            qml.H("a")
-            return hqml.expval(qml.Z("a"))
+            qp.H("a")
+            hl.ConditionalParity(["a", "m"])
+            qp.H("a")
+            return hl.expval(qp.Z("a"))
 
         parity_expval = circuit(alpha)
         if parity == "even":
@@ -49,14 +49,15 @@ class TestSqueezedCatState:
         else:
             assert parity_expval <= -0.95
 
+    @pytest.mark.integration
     @pytest.mark.parametrize("alpha,parity", [(3, "even"), (6, "odd")])
     def test_qubit_fidelity_and_mean_photon_count(self, alpha, parity):
-        dev = qml.device("bosonicqiskit.hybrid", max_fock_level=256)
+        dev = qp.device("bosonicqiskit.hybrid", max_fock_level=256)
 
-        @qml.qnode(dev)
+        @qp.qnode(dev)
         def circuit(alpha):
             SqueezedCatState(alpha, np.pi / 2, parity=parity, wires=["q", "m"])
-            return hqml.expval(qml.Z("q")), hqml.expval(hqml.N("m"))
+            return hl.expval(qp.Z("q")), hl.expval(hl.N("m"))
 
         expval_z, expval_n = circuit(alpha)
         fidelity = (1 + expval_z) / 2
@@ -69,37 +70,40 @@ class TestSqueezedCatState:
         assert np.allclose(expval_n, expected_mean, rtol=1e-2)
 
 
+@pytest.mark.bq
 class TestGKPState:
+    @pytest.mark.integration
     @pytest.mark.slow
     @pytest.mark.parametrize("codeword", (0, 1))
     def test_stabilizer(self, codeword):
         fock_level = 256
-        dev = qml.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
+        dev = qp.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
 
-        @qml.qnode(dev)
+        @qp.qnode(dev)
         def circuit(codeword, delta=1):
             GKPState(delta, logical_state=codeword, wires=["q", "m"])
 
             # SBS stabilizer measurement, fig. 9
             alpha = np.sqrt(np.pi / 8)
             lam = -alpha * delta**2
-            hqml.YCD(lam, 0, wires=["q", "m"])
-            hqml.XCD(2 * alpha, np.pi / 2, wires=["q", "m"])
-            hqml.YCD(lam, 0, wires=["q", "m"])
-            return hqml.expval(qml.Z("q"))
+            hl.YCD(lam, 0, wires=["q", "m"])
+            hl.XCD(2 * alpha, np.pi / 2, wires=["q", "m"])
+            hl.YCD(lam, 0, wires=["q", "m"])
+            return hl.expval(qp.Z("q"))
 
         stabilizer_expval = circuit(codeword, 0.34)
         assert stabilizer_expval >= 0.99  # from table 3
 
+    @pytest.mark.integration
     @pytest.mark.parametrize("codeword", (0, 1))
     def test_error(self, codeword):
         fock_level = 256
-        dev = qml.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
+        dev = qp.device("bosonicqiskit.hybrid", max_fock_level=fock_level)
 
-        @qml.qnode(dev)
+        @qp.qnode(dev)
         def circuit(codeword, delta=1):
             GKPState(delta, logical_state=codeword, wires=["q", "m"])
-            return hqml.expval(qml.Z("q"))
+            return hl.expval(qp.Z("q"))
 
-        errors_dict = qml.resource.algo_error(circuit)(codeword, 0.34)
+        errors_dict = qp.resource.algo_error(circuit)(codeword, 0.34)
         assert errors_dict["SpectralNormError"].error > 0

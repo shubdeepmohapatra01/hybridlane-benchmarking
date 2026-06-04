@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 from __future__ import annotations
 
@@ -19,13 +17,15 @@ from pennylane.drawer.utils import (
 from pennylane.tape import QuantumScript
 
 from .. import ops, sa
-from .mpldrawer import HybridMPLDrawer
 
 has_mpl = True
 try:
     import matplotlib as mpl
+
+    from .mpldrawer import HybridMPLDrawer
 except (ModuleNotFoundError, ImportError):
     has_mpl = False
+    HybridMPLDrawer = object
 
 default_qumode_color = "mediumseagreen"
 default_qubit_color = "darkorchid"
@@ -159,7 +159,7 @@ def tape_mpl(
         decimals: How many decimal points to include when formatting operation parameters.
             Default ``None`` will omit parameters from operation labels.
 
-        style: Visual style of plot. See :py:func:`qml.draw_mpl <pennylane.drawer.draw.draw_mpl>`
+        style: Visual style of plot. See :py:func:`qp.draw_mpl <pennylane.drawer.draw.draw_mpl>`
 
         show_wire_types: If True, draw qumode/qubit icons next to each wire
 
@@ -168,11 +168,11 @@ def tape_mpl(
             for qubits). Colors are anything compatible with Matplotlib.
 
     Returns:
-        matplotlib.figure.Figure, matplotlib.axes._axes.Axes: the return of :py:func:`qml.draw_mpl <pennylane.drawer.draw.draw_mpl>`
+        matplotlib.figure.Figure, matplotlib.axes._axes.Axes: the return of :py:func:`qp.draw_mpl <pennylane.drawer.draw.draw_mpl>`
 
     .. seealso::
 
-        :py:func:`qml.draw_mpl <pennylane.drawer.draw.draw_mpl>`
+        :py:func:`qp.draw_mpl <pennylane.drawer.draw.draw_mpl>`
     """
     try:
         # Patch pennylane to use our drawer instead that handles hybrid gates

@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 r"""Module for exporting circuits compiled to the ion trap to the Jaqal format"""
 
@@ -13,21 +11,23 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import singledispatch, wraps
-from typing import TYPE_CHECKING, Literal, LiteralString
+from typing import TYPE_CHECKING, Literal, LiteralString, cast
 from unittest.mock import patch
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.exceptions import DeviceError
 from pennylane.operation import Operation
 from pennylane.tape import QuantumScript
 
-import hybridlane as hqml
+import hybridlane as hl
 
 from ... import sa
 from . import ops as native_ops
 
 if TYPE_CHECKING:
     from jaqalpaq.qsyntax import qsyntax
+
+QUBIT_BOSON_MODULE = "Calibration_PulseDefinitions.QubitBosonPulses"
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class Qumode:
 # Obtainable from https://gitlab.com/jaqal/qscout-gatemodels/-/blob/master/src/qscout/v1/std/jaqal_gates.py?ref_type=heads
 QUBIT_GATES = {
     "GlobalPhase": None,
-    # "I": None,
+    "Identity": None,
     "R": "R",
     "RX": "Rx",
     "RY": "Ry",
@@ -89,8 +89,8 @@ QUBIT_GATES = {
 
 # Taken from the slides
 BOSON_GATES = {
-    "JaynesCummings": "Red",
-    "AntiJaynesCummings": "Blue",
+    "JaynesCummings": "JC",
+    "AntiJaynesCummings": "AJC",
     "FockState": "FockStatePrep",
     "ConditionalDisplacement": "zCD",
     "ConditionalYDisplacement": "yCD",
@@ -101,6 +101,13 @@ BOSON_GATES = {
 }
 
 
+def get_qubit_gate_defs():
+    from jaqalpaq.core.usepulses import UsePulsesStatement
+
+    stmt = UsePulsesStatement("qscout.v1.std", all)
+    return stmt.load_pulses()
+
+
 # put in function so that it is not executed on import
 def get_boson_gate_defs():
     from jaqalpaq.core import GateDefinition, Parameter, ParamType
@@ -108,26 +115,24 @@ def get_boson_gate_defs():
     return {
         "prepare_all": GateDefinition("prepare_all", []),
         "measure_all": GateDefinition("measure_all", []),
-        "Red": GateDefinition(
-            "Red",
+        "JC": GateDefinition(
+            "JC",
             parameters=[
-                Parameter("q", ParamType.QUBIT),
-                Parameter("n", ParamType.INT),
-                Parameter("phase", ParamType.FLOAT),
-                Parameter("angle", ParamType.FLOAT),
+                Parameter("qubit", ParamType.QUBIT),
                 Parameter("manifold", ParamType.INT),
                 Parameter("mode", ParamType.INT),
+                Parameter("phase", ParamType.FLOAT),
+                Parameter("angle", ParamType.FLOAT),
             ],
         ),
-        "Blue": GateDefinition(
-            "Blue",
+        "AJC": GateDefinition(
+            "AJC",
             parameters=[
-                Parameter("q", ParamType.QUBIT),
-                Parameter("n", ParamType.INT),
-                Parameter("phase", ParamType.FLOAT),
-                Parameter("angle", ParamType.FLOAT),
+                Parameter("qubit", ParamType.QUBIT),
                 Parameter("manifold", ParamType.INT),
                 Parameter("mode", ParamType.INT),
+                Parameter("phase", ParamType.FLOAT),
+                Parameter("angle", ParamType.FLOAT),
             ],
         ),
         "FockStatePrep": GateDefinition(
@@ -204,7 +209,7 @@ def get_boson_gate_defs():
 def to_jaqal(qnode, level: str | int | slice = "user", precision: int = 20):
     @wraps(qnode)
     def wrapper(*args, **kwargs) -> str:
-        batch, fn = qml.workflow.construct_batch(qnode, level=level)(*args, **kwargs)
+        batch, fn = qp.workflow.construct_batch(qnode, level=level)(*args, **kwargs)
         return batch_to_jaqal(
             batch,
             precision=precision,
@@ -216,6 +221,8 @@ def to_jaqal(qnode, level: str | int | slice = "user", precision: int = 20):
 def batch_to_jaqal(
     batch: Sequence[QuantumScript], precision: int = 20
 ) -> LiteralString:
+    from jaqalpaq.core import Circuit
+    from jaqalpaq.core.usepulses import UsePulsesStatement
     from jaqalpaq.generator import generate_jaqal_program
     from jaqalpaq.qsyntax import circuit as jaqal_circuit
 
@@ -229,13 +236,14 @@ def batch_to_jaqal(
         sa_res = sa.analyze(tape)
         num_qubits = max(num_qubits, max(sa_res.qubits) + 1)
 
-    @jaqal_circuit(inject_pulses=get_boson_gate_defs())
+    @jaqal_circuit(
+        inject_pulses=get_boson_gate_defs() | get_qubit_gate_defs(),
+        autoload_pulses="ignore",
+    )
     def program(Q: "qsyntax.Q"):
-        # todo: add boson import statement
-        Q.usepulses("qscout.v1.std")
         q = Q.register(num_qubits, "q")
         for tape in batch:
-            with Q.subcircuit(tape.shots.total_shots):
+            with Q.subcircuit():
                 for op in tape.operations:
                     gate_to_ir(op, Q, q)
 
@@ -243,12 +251,19 @@ def batch_to_jaqal(
         "jaqalpaq.generator.generator._jaqal_value_numeric_context",
         decimal.Context(prec=precision),
     ):
-        ir = program()
+        ir = cast(Circuit, program())  # pyright: ignore[reportCallIssue]
+        # Have to defer the usepulses call until generation or it'll throw a ModuleImportError
+        ir._usepulses.append(UsePulsesStatement(QUBIT_BOSON_MODULE, all))  # type: ignore[reportPrivateUsage]
         return generate_jaqal_program(ir).strip()
 
 
-def convert_params(params):
-    return [p.item() if hasattr(p, "item") else p for p in params]
+def convert_params(params, round_small=True):
+    params = [p.item() if hasattr(p, "item") else p for p in params]
+
+    if round_small:
+        return list(map(lambda x: round(x, 6), params))
+    else:
+        return params
 
 
 @singledispatch
@@ -270,22 +285,21 @@ def _(op: native_ops.R, Q, q):
 
 
 @gate_to_ir.register
-def _(_op: qml.GlobalPhase | qml.Identity, Q, q):
+def _(_op: qp.GlobalPhase | qp.Identity, Q, q):
     return
 
 
 @gate_to_ir.register
-def _(op: hqml.Red | hqml.Blue, Q, q):
+def _(op: hl.Red | hl.Blue, Q, q):
     gate_id = BOSON_GATES[op.name]
     qubit, mode = op.wires
     assert isinstance(mode, Qumode)
-    fock_state = 1  # Hard coded
     [angle, phase] = convert_params(op.parameters)
-    getattr(Q, gate_id)(q[qubit], fock_state, phase, angle, mode.manifold, mode.index)
+    getattr(Q, gate_id)(q[qubit], mode.manifold, mode.index, phase, angle)
 
 
 @gate_to_ir.register
-def _(op: hqml.FockState, Q, q):
+def _(op: hl.FockState, Q, q):
     gate_id = BOSON_GATES[op.name]
     fock_state = int(op.hyperparameters["n"])
     qubit, mode = op.wires
@@ -305,13 +319,15 @@ def _(op: native_ops.SidebandProbe, Q, q):
 
 
 @gate_to_ir.register
-def _(op: hqml.XCD | hqml.YCD | hqml.CD, Q, q):
+def _(op: hl.XCD | hl.YCD | hl.CD, Q, q):
     gate_id = BOSON_GATES[op.name]
     qubit, mode = op.wires
     assert isinstance(mode, Qumode)
-    [beta, angle] = convert_params(op.parameters)
+    [beta, angle] = convert_params(op.parameters, round_small=False)
     beta_re = beta * math.cos(angle)
     beta_im = beta * math.sin(angle)
+    beta_re = round(beta_re, 6)
+    beta_im = round(beta_im, 6)
     getattr(Q, gate_id)(q[qubit], mode.manifold, mode.index, beta_re, beta_im)
 
 

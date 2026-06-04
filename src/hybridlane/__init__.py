@@ -1,12 +1,10 @@
-# Copyright (c) 2025, Battelle Memorial Institute
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
-
-from hybridlane import decomposition, ops, sa, transforms  # noqa: F401
+from hybridlane import decomposition, math, ops, sa, transforms  # noqa: F401
 from hybridlane.drawer import draw_mpl  # noqa: F401
 from hybridlane.io import to_openqasm  # noqa: F401
-from hybridlane.measurements import expval, sample, var  # noqa: F401
+from hybridlane.measurements import expval, sample, state, var  # noqa: F401
 from hybridlane.ops import *  # noqa: F403
 from hybridlane.templates import ECDLayer, FockState, GKPState, SqueezedCatState, StateTransferCVtoDV, StateTransferDVtoCV, random_ecd_params  # noqa: F401
 from hybridlane.transforms import from_pennylane  # noqa: F401

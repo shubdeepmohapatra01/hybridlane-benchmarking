@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 r"""Contains drawing utilities for quantum circuits on the ion trap"""
 
@@ -19,7 +17,7 @@ _mode_colors = {
 
 
 def get_default_style():
-    r"""Gives some defaults for drawing circuits using ``hqml.draw_mpl``
+    r"""Gives some defaults for drawing circuits using ``hl.draw_mpl``
 
     This adds the following styles to a quantum circuit:
 

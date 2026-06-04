@@ -1,12 +1,10 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Hashable
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.measurements import (
     MeasurementProcess,
     MeasurementShapeError,
@@ -66,7 +64,7 @@ class SampleResult(Mapping):
 
         if basis_states is not None:
             shapes: set[tuple[int, ...]] = {
-                qml.math.shape(t) for t in basis_states.values()
+                qp.math.shape(t) for t in basis_states.values()
             }
             if len(shapes) > 1:
                 raise MeasurementShapeError(
@@ -81,7 +79,7 @@ class SampleResult(Mapping):
                 self._schema = schema
 
         elif eigvals is not None:
-            self._shape = qml.math.shape(eigvals)
+            self._shape = qp.math.shape(eigvals)
 
             # No schema necessary if we just have a list of eigenvalues
 
@@ -136,11 +134,11 @@ class SampleResult(Mapping):
         if self.is_basis_states:
             new_tensors = {}
             for w in self._basis_states.keys():
-                new_tensors[w] = qml.math.concatenate(
+                new_tensors[w] = qp.math.concatenate(
                     [self._basis_states[w], other._basis_states[w]], axis=-1
                 )
         else:
-            eigvals = qml.math.concatenate([self._eigvals, other._eigvals], axis=-1)
+            eigvals = qp.math.concatenate([self._eigvals, other._eigvals], axis=-1)
 
         return SampleResult(
             basis_states=new_tensors, eigvals=eigvals, schema=self.schema
@@ -181,7 +179,7 @@ class SampleResult(Mapping):
             )
 
         for wire, tensor in tensors.items():
-            dtype: str = qml.math.get_dtype_name(tensor)
+            dtype: str = qp.math.get_dtype_name(tensor)
             expected_dtype = schema.get_type(wire).__qualname__
 
             if not dtype.startswith(expected_dtype):
@@ -376,14 +374,14 @@ class Truncation(ABC):
         """
         target_shape = self.shape(wire_order)
 
-        state = qml.math.array(state)
-        orig_shape: tuple[int, ...] = qml.math.shape(state)
+        state = qp.math.array(state)
+        orig_shape: tuple[int, ...] = qp.math.shape(state)
         has_batch_dim = len(orig_shape) > 1
 
         if has_batch_dim:
             target_shape = tuple([*orig_shape[:-1], target_shape])
 
-        return qml.math.reshape(state, target_shape)
+        return qp.math.reshape(state, target_shape)
 
 
 class FockTruncation(Truncation, BaseModel):

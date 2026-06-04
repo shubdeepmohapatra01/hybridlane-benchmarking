@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 
 # For entries that list `None`, they are listed for completeness. We should force the user to compile
 # their circuit to the basis defined by gates that have methods listed. However, some of these gates
@@ -53,6 +51,7 @@ cv_gate_map: dict[str, str | None] = {
     "ModeSwap": None,  # has decomposition in terms of beamsplitter
     "Rotation": "cv_r",
     "Squeezing": "cv_sq",
+    "SelectiveNumberArbitraryPhase": "cv_snap",
     "TwoModeSqueezing": "cv_sq2",
     "TwoModeSum": "cv_sum",
 }
@@ -70,14 +69,27 @@ hybrid_gate_map: dict[str, str | None] = {
     "ConditionalTwoModeSum": "cv_c_sum",
     "JaynesCummings": "cv_jc",
     "Rabi": "cv_rb",
-    "SelectiveNumberArbitraryPhase": "cv_snap",
     "SelectiveQubitRotation": "cv_sqr",
 }
 
 misc_gate_map = {"Barrier": "barrier"}
 
-supported_operations = set(
-    k
-    for k, v in (dv_gate_map | cv_gate_map | hybrid_gate_map | misc_gate_map).items()
-    if v is not None
+# These require special handling so there's no clean mapping to a bosonic qiskit method
+state_prep_routines = {
+    "BasisState",
+    "CatState",
+    "CoherentState",
+    "FockStateVector",
+    "StatePrep",
+}
+
+supported_operations = (
+    set(
+        k
+        for k, v in (
+            dv_gate_map | cv_gate_map | hybrid_gate_map | misc_gate_map
+        ).items()
+        if v is not None
+    )
+    | state_prep_routines
 )

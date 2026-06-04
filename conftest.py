@@ -1,50 +1,52 @@
-from doctest import ELLIPSIS, NORMALIZE_WHITESPACE
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
+# Based on Sybil documentation: https://sybil.readthedocs.io/en/latest/quickstart.html
+from doctest import ELLIPSIS
+from typing import Any
 
-import numpy as base_numpy
-import pennylane as qml
-import scipy as base_scipy
+import numpy as np
+import pennylane as qp
+import pytest
 from sybil import Sybil
 from sybil.parsers.rest import DocTestParser, PythonCodeBlockParser
 
-import hybridlane as hqml
+import hybridlane as hl
 
 try:
     import jax
+    import jax.numpy as jnp
 except ImportError:
     jax = None
+    jnp = None
 
-try:
-    import torch
-except ImportError:
-    torch = None
+printoptions = np.get_printoptions()
 
 
-namespace = {
-    "hqml": hqml,
-    "qml": qml,
-    "np": base_numpy,
-    "sp": base_scipy,
-    "pnp": qml.numpy,
-    "jax": jax,
-    "torch": torch,
-    "jnp": getattr(jax, "numpy", None),
-}
-
-
-def reset_pennylane_state(namespace):
-    qml.capture.disable()
-    qml.decomposition.disable_graph()
-
+def setup(namespace: dict[str, Any]):
+    namespace |= {"qp": qp, "hl": hl, "np": np, "jnp": jnp}
+    qp.decomposition.enable_graph()
+    np.set_printoptions(precision=4, suppress=True)
     if jax:
-        jax.config.update("jax_dynamic_shapes", False)
+        jax.config.update("jax_enable_x64", True)
+
+
+def teardown(namespace: dict[str, Any]):
+    np.set_printoptions(**printoptions)
 
 
 pytest_collect_file = Sybil(
-    setup=lambda ns: ns.update(namespace),
     parsers=[
-        DocTestParser(optionflags=ELLIPSIS | NORMALIZE_WHITESPACE),
+        DocTestParser(optionflags=ELLIPSIS),
         PythonCodeBlockParser(),
     ],
     patterns=["docs/source/*.rst", "*.py"],
-    teardown=reset_pennylane_state,
+    setup=setup,
+    teardown=teardown,
+    name="sybil",
 ).pytest()
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if "sybil" in item.nodeid:
+            item.add_marker(pytest.mark.docs)

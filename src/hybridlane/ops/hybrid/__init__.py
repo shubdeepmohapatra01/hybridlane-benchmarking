@@ -1,7 +1,5 @@
-# Copyright (c) 2025, Battelle Memorial Institute
-
-# This software is licensed under the 2-Clause BSD License.
-# See the LICENSE.txt file for full license text.
+# SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
+# SPDX-License-Identifier: BSD-2-Clause
 from .non_parametric_ops import CP, ConditionalParity
 from .parametric_ops_multi_qumode import (
     CBS,
@@ -18,7 +16,6 @@ from .parametric_ops_single_qumode import (
     CS,
     ECD,
     JC,
-    SNAP,
     SQR,
     XCD,
     YCD,
@@ -33,7 +30,6 @@ from .parametric_ops_single_qumode import (
     JaynesCummings,
     Rabi,
     Red,
-    SelectiveNumberArbitraryPhase,
     SelectiveQubitRotation,
 )
 
@@ -52,7 +48,6 @@ __all__ = [
     "CS",
     "ECD",
     "JC",
-    "SNAP",
     "SQR",
     "XCD",
     "YCD",
@@ -67,6 +62,5 @@ __all__ = [
     "JaynesCummings",
     "Rabi",
     "Red",
-    "SelectiveNumberArbitraryPhase",
     "SelectiveQubitRotation",
 ]
