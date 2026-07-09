@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import math
 
-import numpy as np
 import pennylane as qp
 from pennylane.decomposition.symbolic_decomposition import (
     adjoint_rotation,
     pow_rotation,
 )
 from pennylane.operation import CVOperation
-from pennylane.ops.cv import _rotation, _two_term_shift_rule
+from pennylane.ops.cv import _two_term_shift_rule
 from pennylane.typing import TensorLike
 from pennylane.wires import WiresLike
 
 import hybridlane as hl
 
+from ...math.utils import can_replace, concrete_or_error
 from ..mixins import FockRepresentation
 from ..op_math.decompositions.qubit_conditioned_decompositions import to_native_qcond
 
@@ -98,8 +98,8 @@ class Displacement(CVOperation, FockRepresentation):
 
     @staticmethod
     def _heisenberg_rep(p):
-        c = math.cos(p[1])
-        s = math.sin(p[1])
+        c = hl.math.cos(p[1])
+        s = hl.math.sin(p[1])
         scale = math.sqrt(2)
         return hl.math.asarray(
             [
@@ -112,8 +112,16 @@ class Displacement(CVOperation, FockRepresentation):
 
     def adjoint(self):
         a, phi = self.parameters
-        new_phi = (phi + math.pi) % (2 * math.pi)
-        return Displacement(a, new_phi, wires=self.wires)
+        return Displacement(a, phi + math.pi, wires=self.wires).simplify()
+
+    def simplify(self):
+        a, phi = self.parameters[0], self.parameters[1] % (2 * math.pi)
+
+        a = concrete_or_error(None, a, "Cannot simplify D when ``a`` is a tracer")
+        if can_replace(a, 0):
+            return qp.Identity(self.wires)
+
+        return Displacement(a, phi, self.wires)
 
     def label(self, decimals=None, base_label=None, cache=None):
         return super().label(
@@ -212,17 +220,21 @@ class Rotation(CVOperation, FockRepresentation):
 
     @staticmethod
     def _heisenberg_rep(p):
-        return _rotation(-p[0])
+        return hl.math.symplectic.rotation(p[0])
 
     def adjoint(self):
         return Rotation(-self.parameters[0], wires=self.wires)
 
     def simplify(self):
-        theta = self.data[0]
-        if _can_replace(theta, 0):
+        theta = self.data[0] % (2 * math.pi)
+
+        theta = concrete_or_error(
+            None, theta, "Cannot simplify R when ``theta`` is a tracer"
+        )
+        if can_replace(theta, 0):
             return qp.Identity(wires=self.wires)
 
-        return self
+        return Rotation(theta, self.wires)
 
     def label(self, decimals=None, base_label=None, cache=None):
         return super().label(
@@ -253,14 +265,14 @@ r"""Phase space rotation gate :math:`R(\theta)`
 """
 
 
-# Re-export since it matches paper convention
+# Re-export with zeta = re^{i2theta}
 class Squeezing(CVOperation, FockRepresentation):
-    r"""Phase space squeezing gate :math:`S(\zeta)`
+    r"""Phase space squeezing gate :math:`S(r, \theta)`
 
     .. math::
-        S(\zeta) = \exp\left[\frac{1}{2}(\zeta^* a^2 - \zeta(\ad)^2)\right].
+        S(r, \theta) = \exp\left[\frac{1}{2}(\zeta^* a^2 - \zeta(\ad)^2)\right].
 
-    where :math:`\zeta = r e^{i\phi}`.
+    where :math:`\zeta = r e^{i2\theta}`.
 
     **Details**:
 
@@ -268,6 +280,36 @@ class Squeezing(CVOperation, FockRepresentation):
     * Wire arguments: ``[qumode]``
     * Number of parameters: 2
     * Number of dimensions per parameter: ``(0,0)``
+
+    Its symplectic representation is given (in standard units) by
+
+    .. math::
+
+        \begin{pmatrix}
+            I \\
+            \hat{x}' \\
+            \hat{p}'
+        \end{pmatrix} =
+        R^T(\theta) s(r) R(\theta)
+        \begin{pmatrix}
+            I \\
+            \hat{x} \\
+            \hat{p}
+        \end{pmatrix}
+
+    where :math:`s(r) = diag(1, \exp(-r), \exp(r))` (eq. 159 of :footcite:p:`liu2026hybrid`).
+
+    For specific parameter values, it may be obtained like
+
+    >>> S(0.5, 0, wires=0).heisenberg_tr((0,))
+    array([[1.    , 0.    , 0.    ],
+           [0.    , 0.6065, 0.    ],
+           [0.    , 0.    , 1.6487]])
+
+    References
+    ----------
+
+    .. footbibliography::
     """
 
     num_params = 2
@@ -290,13 +332,27 @@ class Squeezing(CVOperation, FockRepresentation):
 
     @staticmethod
     def _heisenberg_rep(p):
-        R = _rotation(p[1] / 2)
-        return R @ np.diag([1, math.exp(-p[0]), math.exp(p[0])]) @ R.T
+        r, phi = p
+
+        # comes from eq. 152 and 153
+        d = hl.math.asarray([1.0, hl.math.exp(-r), hl.math.exp(r)], like=r)
+        s_r = hl.math.diag(d)
+
+        R = hl.math.symplectic.rotation(phi)
+        return hl.math.transpose(R) @ s_r @ R  # eq. 159
 
     def adjoint(self):
-        r, phi = self.parameters
-        new_phi = (phi + np.pi) % (2 * np.pi)
-        return Squeezing(r, new_phi, wires=self.wires)
+        r, theta = self.parameters
+        return Squeezing(-r, theta, wires=self.wires)
+
+    def simplify(self):
+        r, phi = self.data[0], self.data[1] % math.pi
+
+        r = concrete_or_error(None, r, "Cannot simplify S when ``r`` is a tracer")
+        if can_replace(r, 0):
+            return qp.Identity(self.wires)
+
+        return Squeezing(r, phi, self.wires)
 
     def label(self, decimals=None, base_label=None, cache=None):
         return super().label(
@@ -304,10 +360,10 @@ class Squeezing(CVOperation, FockRepresentation):
         )
 
     @staticmethod
-    def compute_fock_matrix(wire_dims: tuple[int, ...], r, phi) -> TensorLike:
+    def compute_fock_matrix(wire_dims: tuple[int, ...], r, theta) -> TensorLike:
         a = hl.math.asarray(hl.A.compute_fock_matrix(wire_dims), like=r)
-        ad = hl.math.conj(hl.math.transpose(a))
-        zeta = r * hl.math.exp(1j * phi)
+        ad = hl.math.dag(a)
+        zeta = r * hl.math.exp(1j * 2 * theta)
         op = 0.5 * (hl.math.conj(zeta) * a @ a - zeta * ad @ ad)
         return hl.math.expm(op)
 
@@ -371,11 +427,15 @@ class Kerr(CVOperation, FockRepresentation):
         return Kerr(-self.parameters[0], wires=self.wires)
 
     def simplify(self):
-        kappa = self.data[0]
-        if _can_replace(kappa, 0):
+        kappa = self.data[0] % (2 * math.pi)
+
+        kappa = concrete_or_error(
+            None, kappa, "Cannot simplify K when ``kappa`` is a tracer"
+        )
+        if can_replace(kappa, 0):
             return qp.Identity(wires=self.wires)
 
-        return self
+        return Kerr(kappa, self.wires)
 
     def label(self, decimals=None, base_label=None, cache=None):
         return super().label(
@@ -436,7 +496,9 @@ class CubicPhase(CVOperation, FockRepresentation):
 
     def simplify(self):
         r = self.data[0]
-        if _can_replace(r, 0):
+
+        r = concrete_or_error(None, r, "Cannot simplify C when ``r`` is a tracer")
+        if can_replace(r, 0):
             return qp.Identity(wires=self.wires)
 
         return self
@@ -501,11 +563,15 @@ class SelectiveNumberArbitraryPhase(CVOperation, FockRepresentation):
 
     Using this decomposition requires dynamic qubit allocation with ``num_work_wires >= 1``:
 
-    >>> dev = qp.device("bosonicqiskit.hybrid", max_fock_level=8)
-    >>> @qp.transforms.decompose(gate_set={hl.SQR}, num_work_wires=1)
-    ... @qp.qnode(dev)
-    ... def circuit():
-    ...     hl.SNAP(0.5, 1, wires=0)
+    .. code-block:: python
+
+        dev = qp.device("default.hybrid", fock_level=8)
+
+        @qp.transforms.decompose(gate_set={hl.SQR}, num_work_wires=1)
+        @qp.qnode(dev)
+        def circuit():
+            hl.SNAP(0.5, 1, wires=0)
+
     >>> print(qp.draw(circuit)())
     <DynamicWire>: ──Allocate─╭SQR_{1}(3.14,0.00)─╭SQR_{1}(-3.14,0.50)──Deallocate─┤...
                 0: ───────────╰SQR_{1}(3.14,0.00)─╰SQR_{1}(-3.14,0.50)─────────────┤...
@@ -575,7 +641,10 @@ class SelectiveNumberArbitraryPhase(CVOperation, FockRepresentation):
         phi = self.data[0] % (2 * math.pi)
         n = self.hyperparameters["n"]
 
-        if _can_replace(phi, 0):
+        phi = concrete_or_error(
+            None, phi, "Cannot simplify SNAP when ``phi`` is a tracer"
+        )
+        if can_replace(phi, 0):
             return qp.Identity(self.wires)
 
         return SelectiveNumberArbitraryPhase(phi, n, self.wires)
@@ -626,11 +695,3 @@ def _snap_to_sqr(phi, wires, n, **_):
 qp.add_decomps(SNAP, _snap_to_sqr)
 qp.add_decomps("Adjoint(SelectiveNumberArbitraryPhase)", adjoint_rotation)
 qp.add_decomps("Pow(SelectiveNumberArbitraryPhase)", pow_rotation)
-
-
-def _can_replace(x, y):
-    return (
-        not qp.math.is_abstract(x)
-        and not qp.math.requires_grad(x)
-        and qp.math.allclose(x, y)
-    )

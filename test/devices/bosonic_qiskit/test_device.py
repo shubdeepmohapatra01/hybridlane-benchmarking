@@ -10,7 +10,7 @@ from pennylane.exceptions import DeviceError
 
 import hybridlane as hl
 from hybridlane.measurements import FockTruncation
-from hybridlane.sa.exceptions import StaticAnalysisError
+from hybridlane.wires.exceptions import TypeCheckError
 
 from ...util import poisson_test
 
@@ -83,7 +83,7 @@ class TestBosonicQiskitDevice:
             )  # wire 0 established as a qubit here
             return hl.expval(hl.NumberOperator(0))  # measure wire 0 in fock basis
 
-        with pytest.raises(StaticAnalysisError):
+        with pytest.raises(TypeCheckError):
             circuit()
 
     @pytest.mark.unit
@@ -103,7 +103,7 @@ class TestBosonicQiskitDevice:
         def circuit():
             return hl.expval(obs)
 
-        with pytest.raises(StaticAnalysisError):
+        with pytest.raises(TypeCheckError):
             circuit()
 
     @pytest.mark.integration
@@ -390,8 +390,8 @@ class TestObservableMeasurements:
 
 
 @pytest.mark.bq
+@pytest.mark.integration
 class TestStateMeasurements:
-    @pytest.mark.integration
     @pytest.mark.parametrize(["wires", "state_index"], [([0, 1], 1), ([1, 0], 2)])
     def test_statevector_with_wire_flips(self, wires, state_index):
         fock_levels = 4
@@ -413,7 +413,6 @@ class TestStateMeasurements:
         target[state_index] = 1.0
         assert np.allclose(state, target)
 
-    @pytest.mark.integration
     @pytest.mark.parametrize(
         ["wires", "state_index"],
         [
@@ -450,6 +449,24 @@ class TestStateMeasurements:
         target = np.zeros((32,), dtype=complex)
         target[state_index] = 1.0
         assert np.allclose(state, target)
+
+    def test_density_matrix(self):
+        fock_levels = 4
+        dev = qp.device("bosonicqiskit.hybrid", max_fock_level=fock_levels)
+
+        # Prepares a cat state with residual entanglement with a qubit
+        @qp.qnode(dev)
+        def circuit():
+            qp.H(0)
+            hl.CD(0.123, 0, wires=[0, 1])
+            return hl.density_matrix(wires=1)
+
+        rho = circuit()
+        assert rho.shape == (fock_levels, fock_levels)
+
+        # Check density matrix properties
+        assert hl.math.linalg.trace(rho) == pytest.approx(1)
+        assert hl.math.linalg.trace(hl.math.linalg.matrix_power(rho, 2)) < 1
 
 
 @pytest.mark.slow

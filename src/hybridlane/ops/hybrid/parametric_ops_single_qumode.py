@@ -13,6 +13,7 @@ from pennylane.wires import WiresLike
 
 import hybridlane as hl
 
+from ...math.utils import can_replace, concrete_or_error
 from ..mixins import FockRepresentation, HybridOperation
 from ..op_math.decompositions.qubit_conditioned_decompositions import (
     decompose_multiqcond_native,
@@ -80,7 +81,10 @@ class ConditionalRotation(HybridOperation, FockRepresentation):
     def simplify(self):
         theta = self.data[0] % (4 * math.pi)
 
-        if _can_replace(theta, 0):
+        theta = concrete_or_error(
+            None, theta, "Cannot simplify CR when ``theta`` is a tracer"
+        )
+        if can_replace(theta, 0):
             return qp.Identity(self.wires)
 
         return ConditionalRotation(theta, self.wires)
@@ -185,7 +189,8 @@ class ConditionalDisplacement(HybridOperation, FockRepresentation):
     def simplify(self):
         a, phi = self.data[0], self.data[1] % (2 * math.pi)
 
-        if _can_replace(a, 0):
+        a = concrete_or_error(None, a, "Cannot simplify CD when ``a`` is a tracer")
+        if can_replace(a, 0):
             return qp.Identity(self.wires)
 
         return ConditionalDisplacement(a, phi, self.wires)
@@ -313,7 +318,8 @@ class ConditionalXDisplacement(HybridOperation, FockRepresentation):
     def simplify(self):
         a, phi = self.data[0], self.data[1] % (2 * math.pi)
 
-        if _can_replace(a, 0):
+        a = concrete_or_error(None, a, "Cannot simplify xCD when ``a`` is a tracer")
+        if can_replace(a, 0):
             return qp.Identity(self.wires)
 
         return ConditionalXDisplacement(a, phi, self.wires)
@@ -421,7 +427,8 @@ class ConditionalYDisplacement(HybridOperation, FockRepresentation):
     def simplify(self):
         a, phi = self.data[0], self.data[1] % (2 * math.pi)
 
-        if _can_replace(a, 0):
+        a = concrete_or_error(None, a, "Cannot simplify yCD when ``a`` is a tracer")
+        if can_replace(a, 0):
             return qp.Identity(self.wires)
 
         return ConditionalYDisplacement(a, phi, self.wires)
@@ -488,7 +495,7 @@ class ConditionalSqueezing(HybridOperation, FockRepresentation):
                         0 & S^\dagger(\zeta)
                     \end{pmatrix}
 
-    where :math:`\zeta = ze^{i\phi} \in \mathbb{C}` (Box IV.3 of :footcite:p:`liu2026hybrid`).
+    where :math:`\zeta = ze^{i2\theta} \in \mathbb{C}` (Box IV.3 of :footcite:p:`liu2026hybrid`).
 
     **Details**:
 
@@ -548,19 +555,20 @@ class ConditionalSqueezing(HybridOperation, FockRepresentation):
         super().__init__(z, phi, wires=wires, id=id)
 
     def pow(self, n: int | float):
-        z, phi = self.data
-        return [ConditionalSqueezing(z * n, phi, self.wires)]
+        z, theta = self.data
+        return [ConditionalSqueezing(z * n, theta, self.wires)]
 
     def adjoint(self):
         return ConditionalSqueezing(-self.data[0], self.data[1], self.wires)
 
     def simplify(self):
-        z, phi = self.data[0], self.data[1] % (2 * math.pi)
+        z, theta = self.data[0], self.data[1] % math.pi
 
-        if _can_replace(z, 0):
+        z = concrete_or_error(None, z, "Cannot simplify CS when ``z`` is a tracer")
+        if can_replace(z, 0):
             return qp.Identity(self.wires)
 
-        return ConditionalSqueezing(z, phi, self.wires)
+        return ConditionalSqueezing(z, theta, self.wires)
 
     def label(self, decimals=None, base_label=None, cache=None):
         return super().label(
@@ -568,9 +576,9 @@ class ConditionalSqueezing(HybridOperation, FockRepresentation):
         )
 
     @staticmethod
-    def compute_fock_matrix(wire_dims: tuple[int, ...], z, phi) -> TensorLike:
-        s = hl.S.compute_fock_matrix(wire_dims[1:], z, phi)
-        sd = hl.math.conj(hl.math.transpose(s))
+    def compute_fock_matrix(wire_dims: tuple[int, ...], z, theta) -> TensorLike:
+        s = hl.S.compute_fock_matrix(wire_dims[1:], z, theta)
+        sd = hl.math.dag(s)
         return hl.math.block_diag([s, sd])
 
 
@@ -579,9 +587,9 @@ def _cs_decomp_resources():
 
 
 @qp.register_resources(_cs_decomp_resources)
-def _cs_decomp(r, phi, wires, **_):
+def _cs_decomp(r, theta, wires, **_):
     qp.adjoint(CR)(math.pi / 2, wires)
-    Squeezing(r, phi + math.pi / 2, wires[1])
+    Squeezing(r, theta + math.pi / 4, wires[1])
     CR(math.pi / 2, wires)
 
 
@@ -677,7 +685,10 @@ class SelectiveQubitRotation(HybridOperation, FockRepresentation):
         phi = phi % (2 * math.pi)
         n = self.hyperparameters["n"]
 
-        if _can_replace(theta, 0):
+        theta = concrete_or_error(
+            None, theta, "Cannot simplify SQR when ``theta`` is a tracer"
+        )
+        if can_replace(theta, 0):
             return qp.Identity(self.wires)
 
         return SelectiveQubitRotation(theta, phi, n, self.wires)
@@ -800,10 +811,13 @@ class JaynesCummings(HybridOperation, FockRepresentation):
         super().__init__(theta, phi, wires=wires, id=id)
 
     def simplify(self):
-        theta = self.data[0] % (2 * math.pi)
+        theta = self.data[0]
         phi = self.data[1] % (2 * math.pi)
 
-        if _can_replace(theta, 0):
+        theta = concrete_or_error(
+            None, theta, "Cannot simplify JC when ``theta`` is a tracer"
+        )
+        if can_replace(theta, 0):
             return qp.Identity(self.wires)
 
         return JaynesCummings(theta, phi, self.wires)
@@ -922,10 +936,13 @@ class AntiJaynesCummings(HybridOperation, FockRepresentation):
         super().__init__(theta, phi, wires=wires, id=id)
 
     def simplify(self):
-        theta = self.data[0] % (2 * math.pi)
+        theta = self.data[0]
         phi = self.data[1] % (2 * math.pi)
 
-        if _can_replace(theta, 0):
+        theta = concrete_or_error(
+            None, theta, "Cannot simplify AJC when ``theta`` is a tracer"
+        )
+        if can_replace(theta, 0):
             return qp.Identity(self.wires)
 
         return AntiJaynesCummings(theta, phi, self.wires)
@@ -1032,7 +1049,8 @@ class Rabi(HybridOperation, FockRepresentation):
         r = self.data[0]
         phi = self.data[1] % (2 * math.pi)
 
-        if _can_replace(r, 0):
+        r = concrete_or_error(None, r, "Cannot simplify RB when ``r`` is a tracer")
+        if can_replace(r, 0):
             return qp.Identity(self.wires)
 
         return Rabi(r, phi, self.wires)
@@ -1140,7 +1158,8 @@ class EchoedConditionalDisplacement(HybridOperation, FockRepresentation):
     def simplify(self):
         a, phi = self.data[0], self.data[1] % (2 * math.pi)
 
-        if _can_replace(a, 0):
+        a = concrete_or_error(None, a, "Cannot simplify ECD when ``a`` is a tracer")
+        if can_replace(a, 0):
             return qp.Identity(self.wires)
 
         return EchoedConditionalDisplacement(a, phi, self.wires)
@@ -1184,11 +1203,3 @@ r"""Echoed-conditional displacement (ECD) gate
 
 This is an alias for :class:`~hybridlane.EchoedConditionalDisplacement`
 """
-
-
-def _can_replace(x, y):
-    return (
-        not qp.math.is_abstract(x)
-        and not qp.math.requires_grad(x)
-        and qp.math.allclose(x, y)
-    )

@@ -1,15 +1,20 @@
 # SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
 # SPDX-License-Identifier: BSD-2-Clause
+from collections.abc import Mapping
+from typing import Hashable
+
 import pennylane as qp
 from pennylane.tape import QuantumScript, QuantumScriptBatch
 from pennylane.typing import PostprocessingFn
 
-from .. import sa
+from .. import wires as sa
+from ..measurements.base import ShapeRequiresWireDims
+from ..wires import Qubit, Qudit, Qumode
 
 
 @qp.transform
 def static_analyze_tape(
-    tape: QuantumScript, fill_missing: str | None = None
+    tape: QuantumScript,
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Circuit pass that validates a wire is only used as a qubit or a qumode
 
@@ -30,18 +35,46 @@ def static_analyze_tape(
     Args:
         tape: The quantum circuit to check
 
-        fill_missing: An optional string of ``("qubits", "qumodes")`` specifying what default
-            to provide for unidentified wires
-
     Raises:
         :py:class:`~hybridlane.sa.StaticAnalysisError` if any wire is used as both a qubit and a qumode across the circuit, or
         if its type cannot be inferred and no default is provided.
     """
 
-    sa.analyze(tape, fill_missing=fill_missing)  # errors if anything is wrong
+    sa.type_check(tape)  # errors if anything is wrong
 
     return (tape,), null_postprocessing
 
 
 def null_postprocessing(results):
     return results[0]
+
+
+@qp.transform
+def fill_wire_dims(
+    tape: QuantumScript,
+    wire_dims: Mapping[Hashable, int] | None = None,
+    default_qumode_dim: int | None = None,
+) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+    wire_dims = wire_dims or {}
+    wire_dims = dict(wire_dims)
+
+    # First type check the circuit and fill any missing qumode dimensions
+    res = sa.type_check(tape)
+    for wire, type_ in res.wire_types.items():
+        match type_:
+            case Qubit():
+                wire_dims.setdefault(wire, 2)
+            case Qumode():
+                wire_dims.setdefault(wire, default_qumode_dim)
+            case Qudit(d):
+                wire_dims.setdefault(wire, d)
+
+    new_measurements = []
+    for mp in tape.measurements:
+        if isinstance(mp, ShapeRequiresWireDims):
+            new_measurements.append(mp.copy_with_wire_dims(wire_dims))
+        else:
+            new_measurements.append(mp)
+
+    new_tape = tape.copy(measurements=new_measurements)
+    return (new_tape,), null_postprocessing

@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: 2025 Battelle Memorial Institute
 # SPDX-License-Identifier: BSD-2-Clause
+import copy
+import functools
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import Hashable
+from dataclasses import dataclass
+from typing import Any, Hashable, Self
 
 import pennylane as qp
 from pennylane.measurements import (
@@ -13,164 +16,95 @@ from pennylane.typing import TensorLike
 from pennylane.wires import Wires
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-import hybridlane.sa as sa  # fixes a circular import
+import hybridlane as hl
+import hybridlane.wires as sa  # fixes a circular import
 
 # -----------------------------------
 #           Sampling Methods
 # -----------------------------------
 
 
-# todo: maybe turn this into a basemodel too, with deserialization from list -> numpy or optional framework?
-# this should also be serializable
-class SampleResult(Mapping):
+@dataclass(frozen=True)
+class SampleResult:
     r"""Container for the results of a sample-based measurement
 
     This class maps wires to arrays of the corresponding type required to contain the result (see
     :py:attr:`.ComputationalBasis.return_type`).
     """
 
-    # Design: In pennylane, basis states and eigvals are grouped together into a single samples tensor because
-    # one can deduce each case by the tensor shape. Here we split it up explicitly because we split up the
-    # basis states by wires to have tensors of different types
+    data: dict[Any, TensorLike]
+    """Mapping from each wire to the basis states drawn from it
 
-    def __init__(
-        self,
-        basis_states: dict[Hashable, TensorLike] | None = None,
-        eigvals: TensorLike | None = None,
-        schema: sa.BasisSchema | None = None,
-    ):
-        r"""
-        Args:
-            samples: A mapping from each wire to the samples drawn from it. Each sample tensor must have the same
-                shape ``(..., shots)``, consisting of optional broadcast dimensions and then a common number of shots.
+    Each array has shape ``(shots,)`` or an optional batch dimension ``(B, shots)``
+    """
 
-            eigvals: A tensor of shape ``(..., shots)`` containing the eigenvalue samples of the observable.
+    bases: sa.BasisMap
 
-            schema: The schema of the basis measured for each wire. If not provided, it is inferred from the dtype of each tensor
+    def __post_init__(self):
+        self.validate_sample_tensors(self.bases, self.data)
 
-        Raises:
-            :py:class:`~pennylane.measurements.MeasurementShapeError`: if the tensors do not all have the same shape
+    @classmethod
+    def from_basis_states(cls, basis_states: dict[Any, TensorLike]) -> Self:
+        bases = sa.infer_bases_from_tensors(basis_states)
+        return cls(data=basis_states, bases=bases)
 
-            :py:class:`ValueError`: if the sample tensors do not match a provided schema
-        """
-
-        if (basis_states is None) == (eigvals is None):
-            raise ValueError(
-                "Must provide either computational basis states or eigenvalues, but not both"
-            )
-
-        self._basis_states = basis_states
-        self._eigvals = eigvals
-
-        if basis_states is not None:
-            shapes: set[tuple[int, ...]] = {
-                qp.math.shape(t) for t in basis_states.values()
-            }
-            if len(shapes) > 1:
-                raise MeasurementShapeError(
-                    f"All sample tensors must have the same shape. Got {shapes}"
-                )
-            self._shape = list(shapes)[0]
-
-            if schema is None:
-                self._schema = sa.infer_schema_from_tensors(basis_states)
-            else:
-                self.validate_sample_tensors(schema, basis_states)
-                self._schema = schema
-
-        elif eigvals is not None:
-            self._shape = qp.math.shape(eigvals)
-
-            # No schema necessary if we just have a list of eigenvalues
-
-        self._ndim = len(self._shape)
+    @functools.cached_property
+    def shape(self) -> tuple[int, ...]:
+        return hl.math.shape(next(iter(self.data.values())))
 
     @property
-    def shape(self):
-        return self._shape
+    def ndim(self) -> int:
+        return len(self.shape)
 
     @property
-    def has_batch_dim(self):
-        return self._ndim > 1
+    def batch_size(self) -> int | None:
+        if self.ndim == 1:
+            return None
+
+        return self.shape[0]
 
     @property
-    def batch_shape(self):
-        return self._shape[:-1]
+    def shots(self) -> int:
+        return self.shape[-1]
 
-    @property
-    def shots(self):
-        return self._shape[-1]
-
-    @property
-    def schema(self):
-        return self._schema
-
-    @property
-    def eigvals(self):
-        return self._eigvals
-
-    @property
-    def is_eigvals(self):
-        return self._eigvals is not None
-
-    @property
-    def basis_states(self):
-        return self._basis_states
-
-    @property
-    def is_basis_states(self):
-        return self._basis_states is not None
-
-    def concatenate(self, other: "SampleResult") -> "SampleResult":
-        # Automatically fails if one is eigenvalues and the other is basis states
-        if self.schema != other.schema:
+    def concatenate(self, other: Self) -> "SampleResult":
+        if self.bases != other.bases:
             raise ValueError("Schemas of each result must match")
 
-        if self.batch_shape != other.batch_shape:
+        if self.batch_size != other.batch_size:
             raise ValueError("Results must have the same outer dimension")
 
-        new_tensors = eigvals = None
+        new_tensors = {}
+        for w in self.data.keys():
+            new_tensors[w] = qp.math.concatenate([self.data[w], other.data[w]], axis=-1)
 
-        if self.is_basis_states:
-            new_tensors = {}
-            for w in self._basis_states.keys():
-                new_tensors[w] = qp.math.concatenate(
-                    [self._basis_states[w], other._basis_states[w]], axis=-1
-                )
-        else:
-            eigvals = qp.math.concatenate([self._eigvals, other._eigvals], axis=-1)
-
-        return SampleResult(
-            basis_states=new_tensors, eigvals=eigvals, schema=self.schema
-        )
+        return SampleResult(data=new_tensors, bases=self.bases)
 
     def slice(self, indices: slice):
-        new_tensors = eigvals = None
+        new_tensors = {}
+        for w in self.data.keys():
+            new_tensors[w] = self.data[w][..., indices]  # ty:ignore[not-subscriptable, invalid-argument-type]
 
-        if self.is_basis_states:
-            new_tensors = {}
-            for w in self.basis_states.keys():
-                new_tensors[w] = self.basis_states[w][..., indices]
-        else:
-            eigvals = self.eigvals[..., indices]
-
-        return SampleResult(
-            basis_states=new_tensors, eigvals=eigvals, schema=self.schema
-        )
+        return SampleResult(data=new_tensors, bases=self.bases)
 
     @staticmethod
     def validate_sample_tensors(
-        schema: sa.BasisSchema, tensors: dict[Hashable, TensorLike]
+        schema: sa.BasisMap, tensors: dict[Hashable, TensorLike]
     ):
-        r"""Checks that provided tensors match the schema
+        r"""Validates the tensors with several checks
+
+        This function tests:
+            - The wires match between the schema and the data
+            - The data type of each tensor matches what's expected from the schema
+            - All wire data has the same shape
 
         Args:
             tensors: The set of wire-tensor pairs to check
 
         Raises:
-            :py:class:`ValueError`: if any of the tensors don't have the expected data type, or if a wire
-                is present in the schema but not in the tensors, or if a wire is present in the tensors but
-                not the schema
+            :py:class:`ValueError`: if any of the tensors don't have the expected data type,
+            or if a wire is present in the schema but not in the tensors, or if a wire is
+            present in the tensors but not the schema
         """
         wires = Wires(tensors.keys())
         if unexpected_wires := Wires.unique_wires([schema.wires, wires]):
@@ -187,16 +121,21 @@ class SampleResult(Mapping):
                     f"Expected type {expected_dtype} for wire {wire}. Got dtype {dtype} instead"
                 )
 
-    # These methods are only compatible if it's a basis state sample result, as they provide methods
-    # for iterating over the wire-tensor pairs
-    def __getitem__(self, key):
-        return self._basis_states[key]
+        # Check all shapes are the same
+        shapes = {qp.math.shape(t) for t in tensors.values()}
+        if len(shapes) > 1:
+            raise MeasurementShapeError(
+                f"All tensors must have the same shape, got shapes {shapes}"
+            )
+
+    def __getitem__(self, key) -> TensorLike:
+        return self.data[key]
 
     def __iter__(self):
-        return iter(self._basis_states)
+        return iter(self.data)
 
     def __len__(self):
-        return len(self._basis_states)
+        return len(self.data)
 
 
 # todo: fill this out with any initialization etc. this should be a serializable format
@@ -209,7 +148,7 @@ class CountsResult(BaseModel):
     wire_order: Wires | None = Field(None)
     """The order of the wires in each basis state"""
 
-    basis_schema: sa.BasisSchema | None = Field(None)
+    bases: sa.BasisMap | None = Field(None)
     """Schema determining the basis each wire is measured in"""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -231,7 +170,7 @@ class CountsResult(BaseModel):
 
     @model_validator(mode="after")
     def check_optional_fields(self) -> "CountsResult":
-        if (self.wire_order is None) != (self.basis_schema is None):
+        if (self.wire_order is None) != (self.bases is None):
             raise ValueError(
                 "Both wire_order and basis_schema must be provided, or neither provided"
             )
@@ -279,14 +218,14 @@ class SampleMeasurement(MeasurementProcess):
     _shortname = "sample"
 
     def __init__(
-        self, obs=None, schema: sa.BasisSchema | None = None, eigvals=None, id=None
+        self, obs=None, bases: sa.BasisMap | None = None, eigvals=None, id=None
     ):
         """
         Args:
             obs: The optional observable to sample from. If provided, the samples will be a set of
                 eigenvalue samples.
 
-            schema: The optional schema describing the bases each wire is measured in. If it is provided,
+            bases: The optional schema describing the bases each wire is measured in. If it is provided,
                 the samples will be computational basis states matching the format in the schema. If an
                 observable is provided, ``schema`` must be ``None``, where it will be inferred from the
                 observable.
@@ -297,21 +236,21 @@ class SampleMeasurement(MeasurementProcess):
 
             id: An optional identifier to label the measurement operation.
         """
-        if (obs is None) == (schema is None):
+        if (obs is None) == (bases is None):
             raise ValueError(
                 "Can only pass observable or schema because schemas are inferred from an observable"
             )
 
-        if schema is None and obs is not None:
-            schema = sa.infer_schema_from_observable(obs)
+        if bases is None and obs is not None:
+            bases = sa.infer_measurement_bases(obs, {})
             wires = None
-        elif schema is not None and obs is None:
-            wires = schema.wires
+        elif bases is not None and obs is None:
+            wires = bases.wires
 
-        assert schema is not None
+        assert bases is not None
 
-        self.schema = schema
-        super().__init__(obs=obs, wires=wires, eigvals=eigvals, id=id)  # type: ignore
+        self.schema = bases
+        super().__init__(obs=obs, wires=wires, eigvals=eigvals, id=id)
 
     @abstractmethod
     def process_samples(
@@ -395,7 +334,7 @@ class FockTruncation(Truncation, BaseModel):
     the maximum energy of a qumode.
     """
 
-    basis_schema: sa.BasisSchema
+    basis_schema: sa.BasisMap
     """Schema holding the basis for each wire"""
 
     dim_sizes: dict[Hashable, int]
@@ -409,7 +348,7 @@ class FockTruncation(Truncation, BaseModel):
     @classmethod
     def all_fock_space(cls, wires: Sequence[Hashable], dim_sizes: dict[Hashable, int]):
         wires = Wires.all_wires(wires)
-        schema = sa.BasisSchema({w: sa.ComputationalBasis.Discrete for w in wires})
+        schema = sa.BasisMap({w: sa.ComputationalBasis.Discrete for w in wires})
         return cls(basis_schema=schema, dim_sizes=dim_sizes)
 
     def __eq__(self, other):
@@ -437,17 +376,66 @@ class StateMeasurement(MeasurementProcess):
 
     _shortname = "state"
 
-    # My notes: Redo state measurement to hold statevectors with arbitrary shape `(..., d1, ..., dn)`
-    # if necessary. Truncation can probably be passed into our version because state measurements are explicitly
-    # classical simulation. For fock state wavefunctions, this is pretty obvious, but I'm not sure how we say that
-    # certain qumodes' states are represented in phase space. Gaussian wavefunctions are symplectic and can be
-    # stored with the appropriate group theory representation like in StrawberryFields. For more general wavefunctions,
-    # this is likely where the x/p truncation Yuan was talking about will live. Maybe mark it as `NotImplementedError` for now.
-
     @abstractmethod
-    def process_state(self, state: StateResult):
+    def process_state(
+        self,
+        state: TensorLike,
+        wire_order: Wires,
+        wire_dims: Mapping[Hashable, int],
+        eigvals: TensorLike | None = None,
+    ) -> TensorLike:
         r"""Calculate the measurement result using the state
 
         Args:
-            state: The statevector with associated truncation and wire order
+            state: The statevector flattened with an optional batch dimension, of shape
+                ``(..., d)``, where ``d`` is the product of the dimensions of each wire.
+
+            wire_order: The order of the wires in the statevector
+
+            wire_dims: A mapping from each wire to its associated dimension
+
+            eigvals: Optional eigenvalue vector of shape ``(d,)`` built by the device.
         """
+
+    @abstractmethod
+    def process_density_matrix(
+        self,
+        dm: TensorLike,
+        wire_order: Wires,
+        wire_dims: Mapping[Hashable, int],
+        eigvals: TensorLike | None = None,
+    ) -> TensorLike:
+        r"""Calculate the measurement result using the density matrix
+
+        Args:
+            dm: The density matrix with an optional batch dimension, of shape
+                ``(..., d, d)``, where ``d`` is the product of the dimensions of each wire.
+
+            wire_order: The order of the wires in the statevector
+
+            wire_dims: A mapping from each wire to its associated dimension
+
+            eigvals: Optional eigenvalue vector of shape ``(d,)`` built by the device.
+        """
+
+
+class ShapeRequiresWireDims(MeasurementProcess):
+    wire_dims: Mapping[Hashable, int] | None = None
+
+    def copy_with_wire_dims(self, wire_dims: Mapping[Hashable, int]) -> Self:
+        """Returns a copy of this measurement with the provided wire dimensions added"""
+        if self.wire_dims is not None:
+            raise ValueError("This measurement already has wire dimensions")
+
+        new = copy.copy(self)
+        new.wire_dims = wire_dims
+        return new
+
+    def map_wires(self, wire_map: dict[Hashable, Hashable]) -> Self:
+        new = super().map_wires(wire_map)
+        if self.wire_dims is not None:
+            new_wire_dims = {
+                wire_map.get(wire, wire): dim for wire, dim in self.wire_dims.items()
+            }
+            new.wire_dims = new_wire_dims
+        return new

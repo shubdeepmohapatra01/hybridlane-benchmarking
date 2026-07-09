@@ -45,7 +45,7 @@ class QuadX(qp.QuadX, Spectral, FockRepresentation):
 
     @property
     def natural_basis(self):
-        return hl.sa.ComputationalBasis.Position
+        return hl.wires.ComputationalBasis.Position
 
     @staticmethod
     def compute_diagonalizing_gates(wires: WiresLike) -> list[Operator]:
@@ -105,7 +105,7 @@ class QuadP(qp.QuadP, Spectral, FockRepresentation):
 
     @property
     def natural_basis(self):
-        return hl.sa.ComputationalBasis.Position
+        return hl.wires.ComputationalBasis.Position
 
     @staticmethod
     def compute_diagonalizing_gates(wires: WiresLike) -> list[Operator]:
@@ -165,7 +165,7 @@ class QuadOperator(qp.QuadOperator, Spectral, FockRepresentation):
 
     @property
     def natural_basis(self):
-        return hl.sa.ComputationalBasis.Position
+        return hl.wires.ComputationalBasis.Position
 
     @staticmethod
     def compute_diagonalizing_gates(
@@ -228,7 +228,7 @@ class NumberOperator(qp.NumberOperator, Spectral, FockRepresentation):
 
     @property
     def natural_basis(self):
-        return hl.sa.ComputationalBasis.Discrete
+        return hl.wires.ComputationalBasis.Discrete
 
     @staticmethod
     def compute_diagonalizing_gates(wires: WiresLike) -> list[Operator]:
@@ -304,7 +304,7 @@ class FockStateProjector(qp.FockStateProjector, Spectral, FockRepresentation):
 
     @property
     def natural_basis(self):
-        return hl.sa.ComputationalBasis.Discrete
+        return hl.wires.ComputationalBasis.Discrete
 
     @property
     def num_wires(self):
@@ -317,10 +317,12 @@ class FockStateProjector(qp.FockStateProjector, Spectral, FockRepresentation):
         return []
 
     def fock_spectrum(self, *basis_states) -> Sequence[float]:
-        n = hl.math.reshape(self.data[0], (1, -1))
-        basis_states = hl.math.asarray(basis_states, like=n)
-        basis_states = hl.math.reshape(basis_states, (-1, len(self.wires)))
-        row_matches = hl.math.all(n == basis_states, axis=-1)
+        n = hl.math.reshape(self.data[0], (len(self.wires), -1))
+        basis_states = hl.math.asarray(basis_states, like=n)  # (w, n?)
+        basis_states = hl.math.reshape(
+            basis_states, (len(self.wires), -1)
+        )  # add n if necessary -> (w, n)
+        row_matches = hl.math.all(n == basis_states, axis=0)  # -> (n,)
         return row_matches + 0
 
     @staticmethod

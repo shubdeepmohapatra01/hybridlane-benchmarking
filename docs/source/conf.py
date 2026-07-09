@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../../src"))
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "Hybridlane"
+project = "hybridlane"
 copyright = f"{datetime.now().year}, Battelle Memorial Institute"
 author = "PNNL"
 
@@ -69,13 +69,14 @@ autoapi_python_class_content = "both"
 autoapi_root = (
     "_autoapi"  # keep out of source directory so autobuild doesn't go haywire
 )
+autoapi_template_dir = "_autoapi_templates"
 autodoc_typehints_format = "short"
 autoapi_own_page_level = "class"
 autoapi_member_document_option = ["class"]
 python_use_unqualified_type_names = True
 
 # Exclude specific patterns from source files
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "_autoapi_templates"]
 
 # Bibtex options
 bibtex_bibfiles = ["refs.bib"]
