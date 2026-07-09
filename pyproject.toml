@@ -55,6 +55,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "ipykernel>=6.29.0",
     "jax>=0.10.1",
     "matplotlib>=3.10.9",
     "openqasm3[parser]>=1.0.1",
