@@ -64,7 +64,7 @@ class ECDLayer(Operation, Hybrid):
     grad_method = None
     resource_keys = set()
 
-    type_signature = (hqml.sa.Qubit(), hqml.sa.Qumode(), hqml.sa.Qumode())
+    type_signature = (hqml.wires.Qubit(), hqml.wires.Qumode(), hqml.wires.Qumode())
 
     def __init__(
         self,

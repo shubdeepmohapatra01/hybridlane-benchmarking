@@ -60,7 +60,7 @@ class StateTransferCVtoDV(Operation, Hybrid):
     @property
     def type_signature(self):
         n = int(self.parameters[0])
-        return tuple([hqml.sa.Qubit()] * n + [hqml.sa.Qumode()])
+        return tuple([hqml.wires.Qubit()] * n + [hqml.wires.Qumode()])
 
     @staticmethod
     def compute_decomposition(
@@ -234,7 +234,7 @@ class StateTransferDVtoCV(Operation, Hybrid):
     @property
     def type_signature(self):
         n = int(self.parameters[0])
-        return tuple([hqml.sa.Qubit()] * n + [hqml.sa.Qumode()])
+        return tuple([hqml.wires.Qubit()] * n + [hqml.wires.Qumode()])
 
     @staticmethod
     def compute_decomposition(
