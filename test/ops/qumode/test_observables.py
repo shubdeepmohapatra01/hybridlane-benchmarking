@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import math
 
+import numpy as np
 import pennylane as qp
 import pytest
 
 import hybridlane as hl
 import hybridlane.wires as sa
+from hybridlane.devices.default_hybrid.state_prep import coherent_state
 
 
 @pytest.mark.unit
@@ -33,19 +35,15 @@ class TestQuadX:
         assert result == pytest.approx(states)
 
     def test_fock_matrix(self):
-        op = hl.QuadX(wires=0)
-        matrix = op.fock_matrix({0: 3})
-        lam = 1 / math.sqrt(2)
-        expected = hl.math.array(
-            [
-                [0, lam, 0],
-                [lam, 0, math.sqrt(2) * lam],
-                [0, math.sqrt(2) * lam, 0],
-            ],
-            dtype=complex,
-        )
-        assert hl.math.get_interface(matrix) == "numpy"
-        assert matrix == pytest.approx(expected)
+        op = hl.X(wires=0)
+        matrix = op.fock_matrix({0: 16})
+
+        rng = np.random.default_rng(42)
+        alphas = rng.uniform(size=5) + 1j * rng.uniform(size=5)
+        for alpha in alphas:
+            state = coherent_state(alpha, 16)
+            expval = hl.math.expectation_value(matrix, state)
+            assert expval == pytest.approx(np.sqrt(2) * alpha.real)  # eq 40
 
 
 @pytest.mark.unit
@@ -58,10 +56,10 @@ class TestQuadP:
         assert op.wires == qp.wires.Wires(0)
 
     def test_diagonalizing_gates(self):
-        op = hl.QuadP(wires=0)
+        op = hl.P(0)
         gates = op.diagonalizing_gates()
-        assert len(gates) == 1
-        assert isinstance(gates[0], hl.Rotation)
+        decomp = op.decomposition()
+        assert [*gates, hl.X(0)] == decomp
 
     def test_natural_basis(self):
         op = hl.QuadP(wires=0)
@@ -70,24 +68,26 @@ class TestQuadP:
     def test_decomposition(self):
         op = hl.QuadP(wires=0)
         decomp = op.decomposition()
-        assert len(decomp) == 2
-        assert isinstance(decomp[0], hl.Rotation)
-        assert decomp[0].parameters[0] == pytest.approx(-math.pi / 2)
-        assert isinstance(decomp[1], hl.QuadX)
+        assert decomp == [hl.R(-math.pi / 2, 0), hl.X(0)]
+
+        # Check numerically
+        dim = 16
+        mat = op.fock_matrix({0: dim})
+        r = decomp[0].fock_matrix({0: dim})  # ty: ignore[unresolved-attribute]
+        x = hl.X.compute_fock_matrix((dim,))
+        actual = hl.math.dag(r) @ mat @ r
+        assert actual == pytest.approx(x)
 
     def test_fock_matrix(self):
-        op = hl.QuadP(wires=0)
-        matrix = op.fock_matrix({0: 3})
-        lam = 1 / math.sqrt(2)
-        expected = hl.math.array(
-            [
-                [0, 1j * lam, 0],
-                [-1j * lam, 0, 1j * math.sqrt(2) * lam],
-                [0, -1j * math.sqrt(2) * lam, 0],
-            ]
-        )
-        assert hl.math.get_interface(matrix) == "numpy"
-        assert matrix == pytest.approx(expected)
+        op = hl.P(wires=0)
+        matrix = op.fock_matrix({0: 16})
+
+        rng = np.random.default_rng(42)
+        alphas = rng.uniform(size=5) + 1j * rng.uniform(size=5)
+        for alpha in alphas:
+            state = coherent_state(alpha, 16)
+            expval = hl.math.expectation_value(matrix, state)
+            assert expval == pytest.approx(np.sqrt(2) * alpha.imag)  # eq 41
 
 
 @pytest.mark.unit
@@ -103,8 +103,8 @@ class TestQuadOperator:
     def test_diagonalizing_gates(self):
         op = hl.QuadOperator(0.5, wires=0)
         gates = op.diagonalizing_gates()
-        assert len(gates) == 1
-        assert isinstance(gates[0], hl.Rotation)
+        decomp = op.decomposition()
+        assert [*gates, hl.X(0)] == decomp
 
     def test_natural_basis(self):
         op = hl.QuadOperator(0.5, wires=0)
@@ -116,7 +116,7 @@ class TestQuadOperator:
         decomp = op.decomposition()
         assert len(decomp) == 2
         assert isinstance(decomp[0], hl.Rotation)
-        assert decomp[0].parameters[0] == pytest.approx(phi)
+        assert decomp[0].parameters[0] == pytest.approx(-phi)
         assert isinstance(decomp[1], hl.QuadX)
 
         # Check the decomposition numerically

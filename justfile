@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 serve-docs:
-    @uv sync --group docs
+    @uv sync --group docs --locked
     @cd docs && uv run sphinx-autobuild source _build/html --watch ../src --ignore "source/_autoapi/**/*.rst" --re-ignore ".*__pycache__.*"
 
 build-docs: test-docs
-    @uv sync --group docs
+    @uv sync --group docs --all-extras --locked
+    @uv run docs/scripts/build_demos.py
     @cd docs && uv run make html
 
 test-all:
@@ -32,3 +33,10 @@ codecov-core:
 codecov:
     @uv sync --all-extras --locked && uv pip install torch --torch-backend=cpu
     @uv run pytest --cov=hybridlane --cov-report=html --cov-report=term-missing
+
+lint:
+    @uv sync --all-extras --locked
+    @uv run ruff check
+    @uv run ruff format
+    @uv run ty check
+    @uv run reuse lint

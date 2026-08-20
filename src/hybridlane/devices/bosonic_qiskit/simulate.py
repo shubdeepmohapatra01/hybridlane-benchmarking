@@ -232,7 +232,7 @@ def get_sparse_observable_matrix(obs: Operator, *cutoffs: int, hbar: float) -> c
             return np.cos(phi) * get_x(cutoffs[0]) + np.sin(phi) * get_p(cutoffs[0])
 
         case hl.FockStateProjector(parameters=(fock_states,)):
-            mats = [cvops.get_projector(n, c) for n, c in zip(fock_states, cutoffs, strict=True)]  # ty:ignore[invalid-argument-type, not-iterable]
+            mats = [cvops.get_projector(n, c) for n, c in zip(fock_states, cutoffs, strict=True)]  # ty:ignore[invalid-argument-type]
             return functools.reduce(sp.kron, mats).asformat("csc")
 
         case _:
@@ -582,5 +582,5 @@ def sampled_measurement(
             bitstrings = qiskit_samples.slice_bits(index)
             basis_states[wire] = bitstrings.array.reshape(shots).astype(int)
 
-    sample_result = SampleResult.from_basis_states(basis_states)
+    sample_result = SampleResult.from_basis_states(basis_states)  # ty: ignore[invalid-argument-type]
     return sample_result

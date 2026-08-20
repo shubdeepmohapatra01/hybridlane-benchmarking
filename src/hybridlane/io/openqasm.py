@@ -10,7 +10,7 @@ Here we give an example with a circuit that performs a measurement that is non-d
     import pennylane as qp
     import hybridlane as hl
 
-    dev = qp.device("bosonicqiskit.hybrid")
+    dev = qp.device("default.hybrid", fock_level=8)
 
     @qp.qnode(dev)
     def circuit(n):
@@ -52,7 +52,7 @@ Output with ``strict=False`` (the default)
     }
     <BLANKLINE>
     state_prep();
-    cv_r(1.57080) m[0];
+    cv_r(-1.57080) m[0];
     float c0 = measure_x m[0];
     bit[1] c1;
     c1[0] = measure q[0];
@@ -92,7 +92,7 @@ Output with ``strict=True``:
     }
     <BLANKLINE>
     state_prep();
-    cv_r(1.57080) m[0];
+    cv_r(-1.57080) m[0];
     float c0 = measure_x(m[0]);
     bit[1] c1;
     c1[0] = measure q[0];
@@ -143,7 +143,7 @@ def to_openqasm(
     .. note::
         Qubit measurements are assumed to be performed in the computational basis, while
         qumode measurements are determined from the
-        :class:`~hybridlane.sa.base.BasisMap` of each measurement. If sampling an
+        :class:`~hybridlane.wires.BasisMap` of each measurement. If sampling an
         observable, this function can provide the gates necessary to diagonalize
         each observable by setting ``rotations=True``. Only wires that are actually
         measured will have measurement statements. Finally, non-overlapping
@@ -174,7 +174,7 @@ def to_openqasm(
         >>> @qp.qnode(qp.device("default.hybrid", fock_level=8))
         ... def circuit():
         ...     qp.H(0)
-        ...     hl.ConditionalDisplacement(0.5, 0, [0, 1])
+        ...     hl.CD(0.5, 0, [0, 1])
         ...     return hl.expval(hl.P(1))
         >>> qasm = hl.to_openqasm(circuit)()
         >>> print(qasm)
@@ -193,7 +193,7 @@ def to_openqasm(
         }
         <BLANKLINE>
         state_prep();
-        cv_r(1.5707963267948966) m[0];
+        cv_r(-1.5707963267948966) m[0];
         float c0 = measure_x m[0];
     """
 
