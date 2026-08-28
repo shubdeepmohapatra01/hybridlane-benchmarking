@@ -53,13 +53,13 @@ DATA_DIR = REPO_ROOT / "cvdv_vs_dv" / "data"
 
 #: Every register size in the study, smallest first so a run that is cut short
 #: has produced the cheap points rather than none of them.
-SIZES = (4, 7, 8, 12, 16)
+SIZES = (4, 7, 8, 10, 12, 16)
 
 #: Problem name per register size. 7 is `knapsack4b`, the instance
 #: `vqe_resource_comparison.ipynb` already settled -- it joins the series as a
 #: fifth point rather than being re-run, see `adopt_knapsack4b`.
 PROBLEMS = {4: "knapsack_n4", 7: "knapsack4b", 8: "knapsack_n8",
-            12: "knapsack_n12", 16: "knapsack_n16"}
+            10: "knapsack_n10", 12: "knapsack_n12", 16: "knapsack_n16"}
 
 #: Depths to try when locating each instance's knee. Deeper instances need
 #: deeper ansaetze, and a sweep that stopped at 8 everywhere would report the
@@ -71,6 +71,11 @@ DEPTH_GRID = {
     # `--force 7` can rebuild it from scratch on the same footing as the others.
     7: (1, 2, 3, 4, 5, 6, 7, 8),
     8: (4, 6, 8, 10, 12, 14),
+    # 10 fills the gap between 8 and 12, where the random-start success rate
+    # falls from 44% to 4%; that is too coarse a step to locate where the ECD
+    # ansatz starts failing. Same grid as 12, since the two instances have the
+    # same simulation cost (Fock cutoff product 8192 for both).
+    10: (6, 8, 10, 12, 14, 16, 20),
     12: (6, 8, 10, 12, 14, 16, 20),
     16: (8, 12, 16, 20),
 }
