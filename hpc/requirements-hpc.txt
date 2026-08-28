@@ -11,14 +11,20 @@
 
 # JAX with bundled CUDA 12 runtime. The wheels ship their own CUDA libraries,
 # so no `module load cuda` is needed and there is no driver/toolkit mismatch.
-jax[cuda12]>=0.4.35
+#
+# The <0.11 bound is load-bearing and mirrors the `cuda` extra in
+# pyproject.toml. JAX 0.11 removed `jax.core.is_concrete`, which PennyLane
+# 0.45's workflow/resolution.py still calls -- every qnode invocation dies with
+# an AttributeError from jax._src.deprecations. Do not relax without checking
+# PennyLane's JAX support first.
+jax[cuda12]<0.11
 
 # Quantum stack. hybridlane itself is installed separately via `pip install -e .`
 pennylane>=0.45.0
 
 # Optimizers. optax is imported by cvdv_multistart, knapsack_dv, and both
 # sandia modules.
-optax>=0.2
+optax>=0.2.8
 
 # Module-level imports on the n=8 sweep path, so a missing one is fatal at
 # import rather than at use: qiskit in knapsack_dv.py:38, bosonic_qiskit in
