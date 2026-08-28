@@ -46,6 +46,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 _GOLDEN_ANGLE = 2.399963229728653  # pi * (3 - sqrt(5)), same constant as sandia
 
+#: Largest register for which `verify_against_sandia` builds the dense Ising
+#: operator as a cross-check. `SparsePauliOp.to_matrix()` costs 16 * 4**n bytes:
+#: 268 MB at 12 variables, 4.3 GB at 14, 68.7 GB at 16. Twelve keeps the check
+#: free everywhere it runs; `cost_diagonal` is checked against `knapsack_cost`
+#: at every size regardless.
+DENSE_VERIFY_MAX_VARS = 12
+
 
 def _sandia(problem: str = "knapsack4b"):
     """Import `sandia.ecd_vqe_sandia` and switch it to `problem`."""
@@ -179,6 +186,33 @@ def brute_force(problem: str = "knapsack4b") -> dict:
     }
 
 
+def cost_diagonal(problem: str = "knapsack4b") -> np.ndarray:
+    """Diagonal of the Ising cost operator, in statevector index order.
+
+    The obvious spelling, ``np.diag(ising.to_matrix())``, allocates a dense
+    ``2**n x 2**n`` complex operator to read ``2**n`` real numbers off it. That
+    is 268 MB at 12 variables and **68.7 GB at 16**, which is what OOM-killed
+    the first 16-variable DV sweep (MaxRSS 63.7 GB against a 64 GB request)
+    after it had already spent 14 hours on the CV-DV half of the job. More
+    memory is not the fix: the same expression needs 17.6 TB at 20 variables.
+
+    The diagonal is just the classical cost of each assignment, which
+    :func:`brute_force` already computes from ``sandia``'s ``knapsack_cost``,
+    so this scatters those costs into little-endian state indices instead --
+    ``2**n`` floats, milliseconds, and no operator at all.
+    ``verify_against_sandia`` checks this against the dense construction at
+    every size where the dense one is affordable.
+    """
+    bf = brute_force(problem)
+    n = problem_spec(problem)["n_vars"]
+    # Statevector index i carries qubit q as bit q (little-endian); the
+    # assignment vectors are in the same q-order, so this is a plain dot.
+    idx = bf["assignments"] @ (1 << np.arange(n))
+    diag = np.empty(2**n, dtype=float)
+    diag[idx] = bf["costs"]
+    return diag
+
+
 def verify_against_sandia(problem: str = "knapsack4b") -> None:
     """Assert the QUBO matrix and Ising operator reproduce `knapsack_cost`."""
     qubo, offset = qubo_matrix(problem)
@@ -190,14 +224,29 @@ def verify_against_sandia(problem: str = "knapsack4b") -> None:
     if not np.allclose(values, bf["costs"]):
         raise AssertionError("QUBO matrix disagrees with sandia's knapsack_cost")
 
-    diag = np.real(np.diag(ising.to_matrix()))
+    # The cheap path, checked at every size.
+    diag = cost_diagonal(problem)
     # Statevector index i has qubit q as bit q (little-endian); z-order matches.
     for idx, z in enumerate(bf["assignments"]):
         state_index = sum(int(b) << q for q, b in enumerate(z))
         if not np.isclose(diag[state_index], bf["costs"][idx]):
             raise AssertionError(
-                f"Ising operator disagrees at z={z.tolist()}: "
+                f"cost_diagonal disagrees at z={z.tolist()}: "
                 f"{diag[state_index]} != {bf['costs'][idx]}"
+            )
+
+    # And the dense Ising construction, wherever it still fits. `to_matrix()`
+    # is 16 * 4**n bytes -- 268 MB at 12 variables, 68.7 GB at 16 -- so above
+    # DENSE_VERIFY_MAX_VARS the operator is left unbuilt rather than allowed to
+    # OOM the job. The identity above is the one the solver depends on; this is
+    # the independent cross-check on `qubo_to_ising`, and skipping it at 16 is
+    # sound because it holds at every size where it can be evaluated.
+    if n <= DENSE_VERIFY_MAX_VARS:
+        dense = np.real(np.diag(ising.to_matrix()))
+        if not np.allclose(dense, diag):
+            raise AssertionError(
+                f"Ising operator disagrees with cost_diagonal at n={n}: "
+                f"max |d| = {np.abs(dense - diag).max()}"
             )
     if not np.isclose(bf["best_cost"], problem_spec(problem)["h_opt"]):
         raise AssertionError(
@@ -354,14 +403,27 @@ def run_dv_vqe(
     n_params = ansatz.num_parameters
     if x0 is None:
         x0 = golden_angle_init(n_params)
-    ham = ising.to_matrix()
+    # `ising` no longer builds the energy -- see below -- but it still has to
+    # describe the same register, and a mismatch here would otherwise surface
+    # as a silently wrong energy rather than an error.
+    n_vars = problem_spec(problem)["n_vars"]
+    if ising.num_qubits != n_vars or ansatz.num_qubits != n_vars:
+        raise ValueError(
+            f"register mismatch for {problem} ({n_vars} variables): operator "
+            f"has {ising.num_qubits} qubits, ansatz has {ansatz.num_qubits}"
+        )
+    # Diagonal in the computational basis, so the dense operator that
+    # `ising.to_matrix()` would build is both unaffordable above 12 variables
+    # (68.7 GB at 16) and unnecessary: <psi|H|psi> is a weighted sum of
+    # probabilities. This also turns an O(4**n) matvec into an O(2**n) one.
+    ham_diag = cost_diagonal(problem)
     opt_idx = optimal_state_indices(problem)
     bf = brute_force(problem)
     history: list[float] = []
 
     def energy(params):
         psi = Statevector.from_instruction(ansatz.assign_parameters(params)).data
-        e = float(np.real(np.vdot(psi, ham @ psi)))
+        e = float(np.real(np.abs(psi) ** 2 @ ham_diag))
         history.append(e)
         return e
 
@@ -369,7 +431,7 @@ def run_dv_vqe(
 
     psi = Statevector.from_instruction(ansatz.assign_parameters(result.x)).data
     probs = np.abs(psi) ** 2
-    e_final = float(np.real(np.vdot(psi, ham @ psi)))
+    e_final = float(probs @ ham_diag)
     best, worst = bf["best_cost"], bf["worst_cost"]
     return {
         "energy": e_final,
@@ -536,9 +598,7 @@ def run_dv_vqe_adam(
 
     spec = problem_spec(problem)
     n_qubits = spec["n_vars"]
-    qubo, offset = qubo_matrix(problem)
-    ising, _ = qubo_to_ising(qubo, offset)
-    cost_diag = jnp.array(np.real(np.diag(ising.to_matrix())))
+    cost_diag = jnp.array(cost_diagonal(problem))
     opt_indices = optimal_state_indices(problem)
     item_indices = optimal_item_indices(problem)
     bf = brute_force(problem)
@@ -609,6 +669,26 @@ def convergence_iters(history, tolerances=(1.0, 0.1, 0.01)) -> dict:
 
 
 def _run_adam_job(job: dict) -> dict:
+    """One sweep entry, leaving no JAX state behind.
+
+    `run_dv_vqe_adam` builds its `lax.scan` from a closure over `cost_diag`,
+    `opt_indices` and `x0`, which XLA bakes in as compile-time constants. Every
+    call therefore compiles a *new* executable that JAX's compilation cache
+    holds on to, and a sweep runs 350 of them back to back in one process
+    whenever `max_workers <= 1` -- which is exactly what the GPU path forces,
+    since a forked CUDA context is unusable.
+
+    Measured at 12 variables and 150 iterations: ~88 MB retained per job,
+    growing without bound. That is ~30 GB across a full sweep at a toy
+    iteration count, and the real 8000-step scans retain far more -- it is what
+    OOM-killed both production sweeps at 63.7 GB of a 64 GB request, after
+    n=8 (a 16x smaller state) had sailed through the same code minutes earlier.
+
+    `jax.clear_caches()` releases them. It costs nothing here because the
+    baked-in constants differ per job, so nothing was ever being reused.
+    """
+    import jax
+
     result = run_dv_vqe_adam(
         n_layers=job["layers"],
         seed=job.get("seed"),
@@ -621,6 +701,7 @@ def _run_adam_job(job: dict) -> dict:
     result.pop("probs", None)
     result.pop("energy_history", None)
     result.pop("params", None)
+    jax.clear_caches()
     return result
 
 
