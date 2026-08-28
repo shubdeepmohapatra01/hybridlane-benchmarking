@@ -1,0 +1,22 @@
+# Python dependencies for the Hazel GPU environment.
+#
+# NOT for your Mac -- jax[cuda12] pulls NVIDIA CUDA wheels that only work on
+# Linux with an NVIDIA driver. Keep local deps in pyproject.toml.
+#
+# Install into the conda env (login node only -- compute nodes have no internet):
+#     pip install --no-cache-dir -r hpc/requirements-hpc.txt
+#
+# Then install this repo itself in editable mode:
+#     pip install --no-cache-dir -e .
+
+# JAX with bundled CUDA 12 runtime. The wheels ship their own CUDA libraries,
+# so no `module load cuda` is needed and there is no driver/toolkit mismatch.
+jax[cuda12]>=0.4.35
+
+# Quantum stack. hybridlane itself is installed separately via `pip install -e .`
+pennylane>=0.45.0
+
+# Numerics and plotting.
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8

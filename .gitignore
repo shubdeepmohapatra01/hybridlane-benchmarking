@@ -229,3 +229,8 @@ __marimo__/
 
 # Code coverage analysis
 .coverage
+
+# --- Local additions: generated artifacts and OS cruft ---
+# Plots are regenerable from cvdv_vs_dv/data/*.npz; keep them out of history.
+*.png
+.DS_Store
