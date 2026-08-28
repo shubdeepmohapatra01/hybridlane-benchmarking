@@ -16,6 +16,16 @@ jax[cuda12]>=0.4.35
 # Quantum stack. hybridlane itself is installed separately via `pip install -e .`
 pennylane>=0.45.0
 
+# Optimizers. optax is imported by cvdv_multistart, knapsack_dv, and both
+# sandia modules.
+optax>=0.2
+
+# Module-level imports on the n=8 sweep path, so a missing one is fatal at
+# import rather than at use: qiskit in knapsack_dv.py:38, bosonic_qiskit in
+# sandia/ecd_vqe_sandia.py:47.
+qiskit>=1.0
+bosonic-qiskit>=15.0
+
 # Numerics and plotting.
 numpy>=1.26
 scipy>=1.11
