@@ -48,10 +48,13 @@ cmd_push() {
         "$REPO_ROOT/" "$HOST:$REMOTE_DIR/"
 }
 
+# run_scaling_sweeps.py writes to cvdv_vs_dv/data/, not results/ -- pull that,
+# plus job logs. /share purges anything untouched for 30 days, so pull often.
 cmd_pull() {
     resolve_remote_dir
-    mkdir -p "$REPO_ROOT/results"
-    rsync -avhP "$HOST:$REMOTE_DIR/results/" "$REPO_ROOT/results/"
+    mkdir -p "$REPO_ROOT/cvdv_vs_dv/data" "$REPO_ROOT/logs"
+    rsync -avhP "$HOST:$REMOTE_DIR/cvdv_vs_dv/data/" "$REPO_ROOT/cvdv_vs_dv/data/"
+    rsync -avhP "$HOST:$REMOTE_DIR/logs/" "$REPO_ROOT/logs/" 2>/dev/null || true
 }
 
 # Interactive GPU shell. Hazel forces interactive jobs onto QOS short_gpu, which
@@ -76,7 +79,7 @@ cmd_submit() {
     local name; name=$(basename "$script" .py)
     ssh "$HOST" "cd '$REMOTE_DIR' && mkdir -p logs && sbatch \
         --partition=gpu --gres=gpu:${gpu}:1 --ntasks=4 --mem=32G \
-        --time=${hours}:00:00 --export=ALL,JAX_ENABLE_X64=1 \
+        --time=${hours}:00:00 --export=ALL,JAX_ENABLE_X64=1,HYQ_DEVICE=gpu \
         --output=logs/%x_%j.out --job-name='${name}' \
         --wrap='python ${script}'"
 }
