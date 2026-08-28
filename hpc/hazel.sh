@@ -41,9 +41,14 @@ cmd_connect() { exec ssh "$HOST"; }
 cmd_push() {
     resolve_remote_dir
     ssh "$HOST" "mkdir -p '$REMOTE_DIR'"
+    # `logs/` is excluded, not merely absent: it is written on Hazel and never
+    # authored here, so with --delete an empty or missing local logs/ would
+    # erase the job output of every run still on the cluster. The same applies
+    # to the *.npz results, which is why those are excluded too.
     rsync -avh --delete \
         --exclude '.git' --exclude '__pycache__' --exclude '*.pyc' \
         --exclude 'results' --exclude '.venv' --exclude '.hazel_env' \
+        --exclude 'logs' \
         --exclude '*.npz' --exclude '*.npy' --exclude '*.png' \
         "$REPO_ROOT/" "$HOST:$REMOTE_DIR/"
 }
