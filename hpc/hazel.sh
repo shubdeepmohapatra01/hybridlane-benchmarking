@@ -4,8 +4,9 @@
 #   ./hpc/hazel.sh connect          open a shell on the login node
 #   ./hpc/hazel.sh push             upload code (rsync, no GitHub auth needed)
 #   ./hpc/hazel.sh pull             download results/ into ./results
-#   ./hpc/hazel.sh gpu [hours]      interactive A100 session (default 1h)
-#   ./hpc/hazel.sh smoke            push + run the GPU smoke test on an A100
+#   ./hpc/hazel.sh submit <py> [gpu] [hrs]   sbatch a script (default a30, 4h)
+#   ./hpc/hazel.sh gpu [hours]      interactive L40S shell (fp64-poor; debug only)
+#   ./hpc/hazel.sh smoke            push + submit the GPU smoke test
 #   ./hpc/hazel.sh status           your queued/running jobs
 #   ./hpc/hazel.sh log <jobid>      follow a job's output
 #   ./hpc/hazel.sh gpus             what GPUs are free right now
@@ -53,21 +54,37 @@ cmd_pull() {
     rsync -avhP "$HOST:$REMOTE_DIR/results/" "$REPO_ROOT/results/"
 }
 
+# Interactive GPU shell. Hazel forces interactive jobs onto QOS short_gpu, which
+# is tied to gpu_partners -- and that partition only has A10/L40S, both running
+# fp64 at ~1/32 rate. Fine for checking imports and shapes; useless for timing
+# the float64 propagator. Use `submit` for anything numeric.
 cmd_gpu() {
     local hours="${1:-1}"
-    echo "Requesting 1x A100 for ${hours}h. This waits in the queue, then drops you"
-    echo "into a shell ON the GPU node. Type 'exit' to release it."
-    exec ssh -t "$HOST" \
-        "salloc --ntasks=4 --partition=gpu --gres=gpu:a100:1 --mem=32G --time=${hours}:00:00"
+    (( hours > 2 )) && { echo "short_gpu caps interactive at 2h; clamping." >&2; hours=2; }
+    echo "Interactive L40S for ${hours}h -- fp64-crippled, debugging only."
+    exec ssh -t "$HOST" "salloc --ntasks=4 --partition=gpu_partners --qos=short_gpu \
+        --gres=gpu:l40s:1 --mem=32G --time=${hours}:00:00"
+}
+
+# Batch submission -- the only route to fp64-capable cards, since batch jobs may
+# use any QOS. Defaults to A30: 9.5 TFLOP/s fp64 via tensor cores, 8 cards, and
+# effectively never contended (vs 4 A100s on one node).
+cmd_submit() {
+    resolve_remote_dir
+    local script="${1:?usage: hazel.sh submit <script.py> [gpu_type] [hours]}"
+    local gpu="${2:-a30}" hours="${3:-4}"
+    local name; name=$(basename "$script" .py)
+    ssh "$HOST" "cd '$REMOTE_DIR' && mkdir -p logs && sbatch \
+        --partition=gpu --gres=gpu:${gpu}:1 --ntasks=4 --mem=32G \
+        --time=${hours}:00:00 --export=ALL,JAX_ENABLE_X64=1 \
+        --output=logs/%x_%j.out --job-name='${name}' \
+        --wrap='python ${script}'"
 }
 
 cmd_smoke() {
-    resolve_remote_dir
     cmd_push
-    echo "Running smoke test on an A100 (queue wait, then ~30s)..."
-    ssh -t "$HOST" "cd '$REMOTE_DIR' && srun --ntasks=1 --partition=gpu \
-        --gres=gpu:a100:1 --mem=16G --time=00:15:00 \
-        python hpc/gpu_smoke_test.py"
+    cmd_submit hpc/gpu_smoke_test.py a30 1
+    echo "Watch with: $0 status    Read with: $0 log <jobid>"
 }
 
 cmd_status() { ssh "$HOST" 'squeue -u $USER'; }
@@ -86,6 +103,7 @@ case "${1:-connect}" in
     pull)    cmd_pull ;;
     gpu)     cmd_gpu "${2:-1}" ;;
     smoke)   cmd_smoke ;;
+    submit)  cmd_submit "${2:-}" "${3:-}" "${4:-}" ;;
     status)  cmd_status ;;
     log)     cmd_log "${2:-}" ;;
     gpus)    cmd_gpus ;;
