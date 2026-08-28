@@ -343,6 +343,12 @@ def _parallel_map(fn, jobs: list, max_workers: int | None):
         return [fn(job) for job in jobs]
     if max_workers is None:
         max_workers = max(1, min(len(jobs), (os.cpu_count() or 2) - 2))
+    # A pool of one buys nothing and, on GPU, actively breaks: the executor
+    # forks on Linux and a forked CUDA context is unusable, so the pool dies
+    # with BrokenProcessPool. Callers pass max_workers=1 on GPU precisely
+    # because there is one card to share.
+    if max_workers <= 1:
+        return [fn(job) for job in jobs]
     try:
         with ProcessPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(fn, jobs))

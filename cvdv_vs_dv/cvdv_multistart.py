@@ -19,6 +19,7 @@ Run from the repo root:
 result rather than re-running it.
 """
 
+import contextlib
 import json
 import os
 import pathlib
@@ -165,9 +166,23 @@ def sweep_multistart(
     if verbose:
         print(f"{len(jobs)} runs, {max_workers} workers", flush=True)
 
+    # One worker means serial, and on GPU that is the *only* safe path.
+    # ProcessPoolExecutor forks on Linux, and forking a process that has
+    # already initialized a CUDA context yields a child whose context is
+    # unusable -- the pool dies with BrokenProcessPool partway through the
+    # sweep, after the GPU has done real work. There is nothing to gain from a
+    # pool of one in any case. `run_scaling_sweeps` sets max_workers=1 whenever
+    # the backend resolved to gpu.
+    if max_workers <= 1:
+        results = (one_start(job) for job in jobs)
+        pool_ctx = contextlib.nullcontext()
+    else:
+        pool_ctx = ProcessPoolExecutor(max_workers=max_workers)
+        results = pool_ctx.map(one_start, jobs)
+
     out = []
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        for res in pool.map(one_start, jobs):
+    with pool_ctx:
+        for res in results:
             out.append(res)
             if verbose:
                 print(
