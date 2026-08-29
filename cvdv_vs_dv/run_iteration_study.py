@@ -165,17 +165,17 @@ def run_cell(size: int, depth: int, n_iters: int, betas, force: bool = False) ->
     wall = (time.time() - t0) / 60
     m = descent_metrics(r["energy_history"], h_opt)
 
-    out = dict(
-        size=size, depth=depth, n_iters=n_iters, h_opt=h_opt,
-        n_params=int(np.asarray(r["params"]).size), n_ecd=2 * depth,
-        energy=float(r["energy"]), p_optimal=float(r["p_optimal"]),
-        confinement=float(r["confinement"]), beta=float(r["beta"]),
-        params=np.asarray(r["params"]),
-        energy_history=_downsample(r["energy_history"]),
-        confinement_history=_downsample(r["confinement_history"]),
-        history_len=int(np.asarray(r["energy_history"]).size),
-        wall_min=wall, **m,
-    )
+    out = {
+        "size": size, "depth": depth, "n_iters": n_iters, "h_opt": h_opt,
+        "n_params": int(np.asarray(r["params"]).size), "n_ecd": 2 * depth,
+        "energy": float(r["energy"]), "p_optimal": float(r["p_optimal"]),
+        "confinement": float(r["confinement"]), "beta": float(r["beta"]),
+        "params": np.asarray(r["params"]),
+        "energy_history": _downsample(r["energy_history"]),
+        "confinement_history": _downsample(r["confinement_history"]),
+        "history_len": int(np.asarray(r["energy_history"]).size),
+        "wall_min": wall, **m,
+    }
     np.savez_compressed(path, **out)
     print(f"[compute] d={depth:2d} it={n_iters:6d}  E={out['energy']:9.4f} "
           f"P(opt)={out['p_optimal']:.4f} beta={out['beta']:.1f} "
@@ -196,41 +196,101 @@ def stage_a(size, depths, iters, betas, force=False) -> None:
             run_cell(size, depth, n_iters, betas, force)
 
 
-def stage_b(size, depth, n_iters, n_seeds, workers, force=False) -> None:
-    """Random starts at one cell: is the winning cell *reliably* winning?"""
+def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict | None:
+    """Random starts at one (depth, budget), cached like a stage-A cell.
+
+    This is the measurement that matters for the study's headline: the CV-DV
+    ansatz is *deployed* from random parameters, so its success rate under
+    random init -- not what the golden-angle initializer can reach -- is what
+    compares against the DV arm's own random-start distribution.
+    """
     from cvdv_vs_dv.cvdv_multistart import sweep_multistart
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"multi_n{size}_d{depth}_it{n_iters}_s{n_seeds}.npz"
     if path.exists() and not force:
-        print(f"[cache] {path.name}", flush=True)
-        return
+        d = dict(np.load(path, allow_pickle=False))
+        p = np.asarray(d["p_optimal"])
+        print(f"[cache] d={depth:2d} it={n_iters:6d}  "
+              f"{int((p >= SUCCESS).sum())}/{p.size} solved", flush=True)
+        return d
 
     t0 = time.time()
-    print(f"[compute] multistart d={depth} it={n_iters} seeds=0..{n_seeds - 1}",
-          flush=True)
+    print(f"[compute] d={depth:2d} it={n_iters:6d} x {n_seeds} seeds ...", flush=True)
     res = sweep_multistart(range(n_seeds), depths=(depth,), max_workers=workers,
                            problem=PROBLEMS[size], n_iters=n_iters, verbose=True)
-    np.savez_compressed(
-        path,
-        seed=[r["seed"] for r in res], depth=[r["depth"] for r in res],
-        n_iters=np.full(len(res), n_iters),
-        energy=[r["energy"] for r in res],
-        p_optimal=[r["p_optimal"] for r in res],
-        p_items=[r["p_items"] for r in res],
-        confinement=[r["confinement"] for r in res],
-        conv_1p0=[r["convergence_iters"]["1.0"] for r in res],
-        conv_0p1=[r["convergence_iters"]["0.1"] for r in res],
-        conv_0p01=[r["convergence_iters"]["0.01"] for r in res],
-        params=np.array([r["params"] for r in res]),
-        # `run_scaling_sweeps` discards these; here they are the point, since
-        # the question is where a truncated trajectory was heading.
-        history=np.array([_downsample(r["history"]) for r in res]),
-        history_len=[len(r["history"]) for r in res],
-    )
-    n_ok = sum(r["p_optimal"] >= SUCCESS for r in res)
-    print(f"[compute] done in {(time.time() - t0) / 60:.1f} min -- "
-          f"{n_ok}/{len(res)} reached P(opt) >= {SUCCESS}", flush=True)
+    p_opt = np.array([r["p_optimal"] for r in res])
+    # conv_* are relative to each run's *own* final energy, so a value near the
+    # budget means that run was still descending when it stopped. Averaged over
+    # seeds this is the direct test of "is the budget the binding constraint?".
+    conv = np.array([r["convergence_iters"]["0.01"] for r in res], dtype=float)
+    out = {
+        "size": size, "depth": depth, "n_iters": n_iters, "n_seeds": n_seeds,
+        "seed": [r["seed"] for r in res],
+        "energy": [r["energy"] for r in res], "p_optimal": p_opt,
+        "p_items": [r["p_items"] for r in res],
+        "confinement": [r["confinement"] for r in res],
+        "conv_1p0": [r["convergence_iters"]["1.0"] for r in res],
+        "conv_0p1": [r["convergence_iters"]["0.1"] for r in res],
+        "conv_0p01": conv,
+        "params": np.array([r["params"] for r in res]),
+        "history": np.array([_downsample(r["history"]) for r in res]),
+        "history_len": [len(r["history"]) for r in res],
+        # fraction of the budget consumed before the run stopped improving
+        "truncation": float(np.mean(conv / n_iters)),
+        "wall_min": (time.time() - t0) / 60,
+    }
+    np.savez_compressed(path, **out)
+    n_ok = int((p_opt >= SUCCESS).sum())
+    print(f"[compute] d={depth:2d} it={n_iters:6d}  {n_ok}/{n_seeds} solved, "
+          f"best P(opt)={p_opt.max():.4f}, truncation={out['truncation']:.2f} "
+          f"({out['wall_min']:.1f} min)", flush=True)
+    return out
+
+
+def stage_b(size, depths, iters, n_seeds, workers, force=False) -> None:
+    """The random-start grid: every (depth, budget), `n_seeds` starts each.
+
+    Ordered cheapest-first (budget outer, depth inner) so a job that runs out
+    of wall-clock has finished whole low-budget rows rather than a ragged
+    corner, and every cell is cached independently so a resubmit resumes.
+    """
+    for n_iters in sorted(iters):
+        for depth in sorted(depths):
+            multistart_cell(size, depth, n_iters, n_seeds, workers, force)
+
+
+def report_multistart(sizes) -> None:
+    """Success rate per (depth, budget), the number the study actually needs."""
+    for size in sizes:
+        cells = sorted(OUT_DIR.glob(f"multi_n{size}_*.npz"))
+        if not cells:
+            continue
+        rows = [dict(np.load(c, allow_pickle=False)) for c in cells]
+        print(f"\n=== n={size} random starts ({PROBLEMS[size]}) ===")
+        print(f"{'depth':>6}{'iters':>8}{'seeds':>7}{'solved':>8}{'rate':>8}"
+              f"{'bestP':>8}{'medP':>8}{'medE':>10}{'trunc':>8}  budget")
+        for r in sorted(rows, key=lambda r: (int(r["depth"]), int(r["n_iters"]))):
+            p = np.asarray(r["p_optimal"])
+            e = np.asarray(r["energy"])
+            n = p.size
+            ok = int((p >= SUCCESS).sum())
+            trunc = float(r["truncation"])
+            # >0.9 means the median run was still improving at the very end:
+            # the budget, not the depth, is what stopped it.
+            note = "BINDING" if trunc > 0.9 else "adequate" if trunc < 0.75 else "marginal"
+            print(f"{int(r['depth']):6d}{int(r['n_iters']):8d}{n:7d}{ok:8d}"
+                  f"{ok / n:8.0%}{p.max():8.4f}{np.median(p):8.4f}"
+                  f"{np.median(e):10.3f}{trunc:8.2f}  {note}")
+        best = max(rows, key=lambda r: ((np.asarray(r["p_optimal"]) >= SUCCESS).mean(),
+                                        -int(r["depth"]), -int(r["n_iters"])))
+        bp = np.asarray(best["p_optimal"])
+        if (bp >= SUCCESS).any():
+            print(f"  --> best rate: depth {int(best['depth'])} "
+                  f"({2 * int(best['depth'])} ECD gates) at {int(best['n_iters'])} "
+                  f"iterations, {int((bp >= SUCCESS).sum())}/{bp.size}")
+        else:
+            print("  --> no cell produced a single success at any depth or budget")
 
 
 def report(sizes) -> None:
@@ -295,9 +355,12 @@ def main():  # pragma: no cover - driver
                     help="budgets to run; stage B uses the last one")
     ap.add_argument("--depth", type=int, default=None,
                     help="stage B: the single depth to draw random starts at")
-    ap.add_argument("--seeds", type=int, default=20,
-                    help="stage B starts. Five would not resolve a rate near "
-                         "5%%: it returns zero successes 77%% of the time")
+    ap.add_argument("--seeds", type=int, default=8,
+                    help="random starts per stage-B cell. This grid trades "
+                         "seeds for coverage: 8 detects a large shift in the "
+                         "rate (5%% -> 50%%) but cannot estimate a small one -- "
+                         "at a true 5%%, 8 draws come back empty 66%% of the "
+                         "time. Re-run the winning cell with 50 to quote a rate")
     ap.add_argument("--betas", type=float, nargs="+", default=[0.8],
                     help="stage A initial displacements. Each beta is a full "
                          "optimization, so the production default (0.6 0.8 1.0) "
@@ -311,6 +374,7 @@ def main():  # pragma: no cover - driver
 
     if args.report:
         report(args.sizes)
+        report_multistart(args.sizes)
         return
 
     if args.dry_run:
@@ -327,11 +391,15 @@ def main():  # pragma: no cover - driver
                     print(f"  A  d={d:2d} it={it:6d}  ~{m:6.1f} min"
                           f"{'  [cached]' if done else ''}")
         if "b" in args.stage:
-            d = args.depth if args.depth is not None else max(args.depths)
-            m = _estimate_minutes(args.size, d, sorted(args.iters)[-1], args.seeds)
-            total += m
-            print(f"  B  d={d:2d} it={sorted(args.iters)[-1]:6d} x {args.seeds} "
-                  f"seeds  ~{m:6.1f} min")
+            depths = [args.depth] if args.depth is not None else args.depths
+            for it in sorted(args.iters):
+                for d in sorted(depths):
+                    done = (OUT_DIR / f"multi_n{args.size}_d{d}_it{it}"
+                            f"_s{args.seeds}.npz").exists()
+                    m = _estimate_minutes(args.size, d, it, args.seeds)
+                    total += 0 if done else m
+                    print(f"  B  d={d:2d} it={it:6d} x {args.seeds} seeds "
+                          f"~{m:6.1f} min{'  [cached]' if done else ''}")
         print(f"\n  estimated total: {total / 60:.1f} h\n", flush=True)
         return
 
@@ -347,10 +415,11 @@ def main():  # pragma: no cover - driver
         stage_a(args.size, args.depths, args.iters, tuple(args.betas), args.force)
         report([args.size])
     if "b" in args.stage:
-        depth = args.depth if args.depth is not None else max(args.depths)
-        print(f"\n=== stage B: multistart, n={args.size} d={depth} ===", flush=True)
-        stage_b(args.size, depth, sorted(args.iters)[-1], args.seeds, workers,
-                args.force)
+        depths = [args.depth] if args.depth is not None else args.depths
+        print(f"\n=== stage B: random starts, n={args.size}, "
+              f"{args.seeds} seeds/cell ===", flush=True)
+        stage_b(args.size, depths, args.iters, args.seeds, workers, args.force)
+        report_multistart([args.size])
     print("\nall done", flush=True)
 
 
