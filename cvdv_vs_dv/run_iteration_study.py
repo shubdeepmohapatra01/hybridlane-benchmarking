@@ -79,7 +79,7 @@ for _p in (str(REPO_ROOT), SANDIA):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from cvdv_vs_dv.run_scaling_sweeps import PROBLEMS  # noqa: E402
+from cvdv_vs_dv.run_scaling_sweeps import DV_LAYERS, PROBLEMS  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "cvdv_vs_dv" / "data" / "iteration_study"
 
@@ -103,6 +103,13 @@ ENERGY_TOL = 2.0
 #: n=16 is 512x256 = 131072, i.e. 16x the state, and gets its own rate from its
 #: 143.2 min sweep.
 MIN_PER_DEPTH_KILOITER = {8: 0.060, 10: 0.060, 12: 0.060, 16: 0.107}
+
+#: Same idea for the DV arm, per (1000 iterations x seed), independent of layer
+#: count -- the cost is dominated by the 2**n statevector, not the parameter
+#: count. n=8 is measured (350 jobs at 8000 iters in 210.8 min -> 0.075); the
+#: larger sizes are extrapolated by state size and are rough, since the DV
+#: sweeps at 12 and 16 have never completed.
+DV_MIN_PER_KILOITER = {8: 0.075, 10: 0.15, 12: 0.30, 16: 1.2}
 
 
 def cell_path(size: int, depth: int, n_iters: int, beta_tag: str) -> Path:
@@ -260,6 +267,87 @@ def stage_b(size, depths, iters, n_seeds, workers, force=False) -> None:
             multistart_cell(size, depth, n_iters, n_seeds, workers, force)
 
 
+def dv_cell(size, layers, n_iters, n_seeds, workers, force=False) -> dict | None:
+    """DV hardware-efficient VQE at one (layers, budget), `n_seeds` starts.
+
+    Exists so the comparison stays *optimizer-matched*. `vqe_resource_comparison`
+    rests on both arms getting the same optimizer, the same step count and the
+    same success criterion; the moment CV-DV is given 32000 iterations and DV is
+    left at `MATCHED_N_ITERS = 8000`, the headline gap is partly a budget gap and
+    the claim is no longer defensible.
+
+    In practice this should not move the DV numbers -- DV's median `conv_0p01`
+    is 386 at n=8 and 1954 at n=12, so it has long since converged by 8000 and
+    the extra steps are wasted on it. That is the point: "both arms were offered
+    32000 steps, DV plateaued at ~2000 and CV-DV used all of them" is a far
+    stronger statement than one where only CV-DV was measured at the larger
+    budget.
+    """
+    from cvdv_vs_dv.knapsack_dv import sweep_dv_vqe_adam
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / f"dv_n{size}_L{layers}_it{n_iters}_s{n_seeds}.npz"
+    if path.exists() and not force:
+        d = dict(np.load(path, allow_pickle=False))
+        p = np.asarray(d["p_optimal"])
+        print(f"[cache] L={layers:2d} it={n_iters:6d}  "
+              f"{int((p >= SUCCESS).sum())}/{p.size} solved", flush=True)
+        return d
+
+    t0 = time.time()
+    print(f"[compute] DV L={layers:2d} it={n_iters:6d} x {n_seeds} seeds ...",
+          flush=True)
+    jobs = [{"layers": layers, "seed": sd, "problem": PROBLEMS[size],
+             "n_iters": n_iters} for sd in range(n_seeds)]
+    res = sweep_dv_vqe_adam(jobs, max_workers=workers)
+    p_opt = np.array([r["p_optimal"] for r in res])
+    conv = np.array([r["convergence_iters"]["0.01"] for r in res], dtype=float)
+    out = {
+        "size": size, "layers": layers, "n_iters": n_iters, "n_seeds": n_seeds,
+        "n_params": [r["n_params"] for r in res],
+        "energy": [r["energy"] for r in res], "p_optimal": p_opt,
+        "p_items": [r["p_items"] for r in res],
+        "approx_ratio": [r["approx_ratio"] for r in res],
+        "conv_1p0": [r["convergence_iters"]["1.0"] for r in res],
+        "conv_0p1": [r["convergence_iters"]["0.1"] for r in res],
+        "conv_0p01": conv,
+        "truncation": float(np.mean(conv / n_iters)),
+        "wall_min": (time.time() - t0) / 60,
+    }
+    np.savez_compressed(path, **out)
+    n_ok = int((p_opt >= SUCCESS).sum())
+    print(f"[compute] DV L={layers:2d} it={n_iters:6d}  {n_ok}/{n_seeds} solved, "
+          f"best P(opt)={p_opt.max():.4f}, truncation={out['truncation']:.2f} "
+          f"({out['wall_min']:.1f} min)", flush=True)
+    return out
+
+
+def stage_dv(size, layers, iters, n_seeds, workers, force=False) -> None:
+    """The DV arm over the same budgets the CV-DV grid uses."""
+    for n_iters in sorted(iters):
+        for n_layers in sorted(layers):
+            dv_cell(size, n_layers, n_iters, n_seeds, workers, force)
+
+
+def report_dv(sizes) -> None:
+    """DV success rate per (layers, budget) -- the matched comparison arm."""
+    for size in sizes:
+        cells = sorted(OUT_DIR.glob(f"dv_n{size}_*.npz"))
+        if not cells:
+            continue
+        rows = [dict(np.load(c, allow_pickle=False)) for c in cells]
+        print(f"\n=== n={size} DV arm ({PROBLEMS[size]}) ===")
+        print(f"{'layers':>7}{'n_par':>7}{'iters':>8}{'seeds':>7}{'solved':>8}"
+              f"{'rate':>8}{'bestP':>8}{'trunc':>8}")
+        for r in sorted(rows, key=lambda r: (int(r["layers"]), int(r["n_iters"]))):
+            p = np.asarray(r["p_optimal"])
+            npar = int(np.asarray(r["n_params"])[0])
+            ok = int((p >= SUCCESS).sum())
+            print(f"{int(r['layers']):7d}{npar:7d}{int(r['n_iters']):8d}{p.size:7d}"
+                  f"{ok:8d}{ok / p.size:8.0%}{p.max():8.4f}"
+                  f"{float(r['truncation']):8.2f}")
+
+
 def report_multistart(sizes) -> None:
     """Success rate per (depth, budget), the number the study actually needs."""
     for size in sizes:
@@ -344,7 +432,11 @@ def _estimate_minutes(size, depth, n_iters, n_runs=1, betas=1) -> float:
 def main():  # pragma: no cover - driver
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stage", choices=("a", "b", "ab"), default="a")
+    ap.add_argument("--stage", choices=("a", "b", "d", "ab", "bd", "abd"),
+                    default="a",
+                    help="a=deterministic depth grid, b=random-start grid, "
+                         "d=DV arm at the same budgets (keeps the comparison "
+                         "optimizer-matched)")
     ap.add_argument("--report", action="store_true",
                     help="print the grid found so far and exit")
     ap.add_argument("--sizes", type=int, nargs="+", default=[8, 10, 12],
@@ -366,6 +458,9 @@ def main():  # pragma: no cover - driver
                          "optimization, so the production default (0.6 0.8 1.0) "
                          "is 3x the cost; 0.8 alone is the grid default and the "
                          "winning cell can be re-run with all three")
+    ap.add_argument("--layers", type=int, nargs="+", default=list(DV_LAYERS),
+                    help=f"stage D layer counts (default {list(DV_LAYERS)}, "
+                         "matching vqe_resource_comparison)")
     ap.add_argument("--device", default="auto", choices=backend.VALID)
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--force", action="store_true")
@@ -375,6 +470,7 @@ def main():  # pragma: no cover - driver
     if args.report:
         report(args.sizes)
         report_multistart(args.sizes)
+        report_dv(args.sizes)
         return
 
     if args.dry_run:
@@ -400,6 +496,16 @@ def main():  # pragma: no cover - driver
                     total += 0 if done else m
                     print(f"  B  d={d:2d} it={it:6d} x {args.seeds} seeds "
                           f"~{m:6.1f} min{'  [cached]' if done else ''}")
+        if "d" in args.stage:
+            for it in sorted(args.iters):
+                for n_layers in sorted(args.layers):
+                    done = (OUT_DIR / f"dv_n{args.size}_L{n_layers}_it{it}"
+                            f"_s{args.seeds}.npz").exists()
+                    m = (DV_MIN_PER_KILOITER.get(args.size, 0.3)
+                         * (it / 1000) * args.seeds)
+                    total += 0 if done else m
+                    print(f"  D  L={n_layers:2d} it={it:6d} x {args.seeds} seeds "
+                          f"~{m:6.1f} min{'  [cached]' if done else ''}")
         print(f"\n  estimated total: {total / 60:.1f} h\n", flush=True)
         return
 
@@ -420,6 +526,12 @@ def main():  # pragma: no cover - driver
               f"{args.seeds} seeds/cell ===", flush=True)
         stage_b(args.size, depths, args.iters, args.seeds, workers, args.force)
         report_multistart([args.size])
+    if "d" in args.stage:
+        print(f"\n=== stage D: DV arm, n={args.size}, "
+              f"{args.seeds} seeds/cell ===", flush=True)
+        stage_dv(args.size, args.layers, args.iters, args.seeds, workers,
+                 args.force)
+        report_dv([args.size])
     print("\nall done", flush=True)
 
 
