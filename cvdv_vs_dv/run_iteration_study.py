@@ -203,7 +203,8 @@ def stage_a(size, depths, iters, betas, force=False) -> None:
             run_cell(size, depth, n_iters, betas, force)
 
 
-def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict | None:
+def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False,
+                    seed_start: int = 0) -> dict | None:
     """Random starts at one (depth, budget), cached like a stage-A cell.
 
     This is the measurement that matters for the study's headline: the CV-DV
@@ -214,7 +215,12 @@ def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict
     from cvdv_vs_dv.cvdv_multistart import sweep_multistart
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"multi_n{size}_d{depth}_it{n_iters}_s{n_seeds}.npz"
+    # Seeds 0..n-1 keep the original filename so the cells already computed
+    # stay discoverable; a chunk starting elsewhere gets a `_from{k}` suffix.
+    # `report_multistart` stitches the chunks of one (depth, budget) back
+    # together, so splitting a 50-seed cell across jobs is invisible downstream.
+    suffix = "" if seed_start == 0 else f"_from{seed_start}"
+    path = OUT_DIR / f"multi_n{size}_d{depth}_it{n_iters}_s{n_seeds}{suffix}.npz"
     if path.exists() and not force:
         d = dict(np.load(path, allow_pickle=False))
         p = np.asarray(d["p_optimal"])
@@ -223,8 +229,10 @@ def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict
         return d
 
     t0 = time.time()
-    print(f"[compute] d={depth:2d} it={n_iters:6d} x {n_seeds} seeds ...", flush=True)
-    res = sweep_multistart(range(n_seeds), depths=(depth,), max_workers=workers,
+    seeds = range(seed_start, seed_start + n_seeds)
+    print(f"[compute] d={depth:2d} it={n_iters:6d} seeds {seeds.start}"
+          f"..{seeds.stop - 1} ...", flush=True)
+    res = sweep_multistart(seeds, depths=(depth,), max_workers=workers,
                            problem=PROBLEMS[size], n_iters=n_iters, verbose=True)
     p_opt = np.array([r["p_optimal"] for r in res])
     # conv_* are relative to each run's *own* final energy, so a value near the
@@ -233,6 +241,7 @@ def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict
     conv = np.array([r["convergence_iters"]["0.01"] for r in res], dtype=float)
     out = {
         "size": size, "depth": depth, "n_iters": n_iters, "n_seeds": n_seeds,
+        "seed_start": seed_start,
         "seed": [r["seed"] for r in res],
         "energy": [r["energy"] for r in res], "p_optimal": p_opt,
         "p_items": [r["p_items"] for r in res],
@@ -255,7 +264,8 @@ def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False) -> dict
     return out
 
 
-def stage_b(size, depths, iters, n_seeds, workers, force=False) -> None:
+def stage_b(size, depths, iters, n_seeds, workers, force=False,
+            seed_start: int = 0) -> None:
     """The random-start grid: every (depth, budget), `n_seeds` starts each.
 
     Ordered cheapest-first (budget outer, depth inner) so a job that runs out
@@ -264,7 +274,8 @@ def stage_b(size, depths, iters, n_seeds, workers, force=False) -> None:
     """
     for n_iters in sorted(iters):
         for depth in sorted(depths):
-            multistart_cell(size, depth, n_iters, n_seeds, workers, force)
+            multistart_cell(size, depth, n_iters, n_seeds, workers, force,
+                            seed_start)
 
 
 def dv_cell(size, layers, n_iters, n_seeds, workers, force=False) -> dict | None:
@@ -354,7 +365,34 @@ def report_multistart(sizes) -> None:
         cells = sorted(OUT_DIR.glob(f"multi_n{size}_*.npz"))
         if not cells:
             continue
-        rows = [dict(np.load(c, allow_pickle=False)) for c in cells]
+        chunks = [dict(np.load(c, allow_pickle=False)) for c in cells]
+        # Stitch seed-chunks of the same (depth, budget) back into one cell, so
+        # a 50-seed run split across two jobs reports as 50 seeds rather than
+        # two unrelated rows. Seeds are deduplicated because a re-run with a
+        # different --seed-start can overlap an existing chunk.
+        merged: dict[tuple[int, int], dict] = {}
+        for c in chunks:
+            key = (int(c["depth"]), int(c["n_iters"]))
+            m = merged.setdefault(key, {"depth": key[0], "n_iters": key[1],
+                                        "seed": [], "p_optimal": [],
+                                        "energy": [], "conv_0p01": []})
+            for field in ("seed", "p_optimal", "energy", "conv_0p01"):
+                m[field].extend(np.asarray(c[field]).ravel().tolist())
+        rows = []
+        for key, m in merged.items():
+            seen, keep = set(), []
+            for i, sd in enumerate(m["seed"]):
+                if sd not in seen:
+                    seen.add(sd)
+                    keep.append(i)
+            idx = np.array(keep, dtype=int)
+            rows.append({
+                "depth": key[0], "n_iters": key[1],
+                "seed": np.array(m["seed"])[idx],
+                "p_optimal": np.array(m["p_optimal"])[idx],
+                "energy": np.array(m["energy"])[idx],
+                "truncation": float(np.mean(np.array(m["conv_0p01"])[idx]) / key[1]),
+            })
         print(f"\n=== n={size} random starts ({PROBLEMS[size]}) ===")
         print(f"{'depth':>6}{'iters':>8}{'seeds':>7}{'solved':>8}{'rate':>8}"
               f"{'bestP':>8}{'medP':>8}{'medE':>10}{'trunc':>8}  budget")
@@ -458,6 +496,11 @@ def main():  # pragma: no cover - driver
                          "optimization, so the production default (0.6 0.8 1.0) "
                          "is 3x the cost; 0.8 alone is the grid default and the "
                          "winning cell can be re-run with all three")
+    ap.add_argument("--seed-start", type=int, default=0, dest="seed_start",
+                    help="first random seed for stage B. Lets a 50-seed cell be "
+                         "split across jobs (--seeds 25 --seed-start 0, then "
+                         "--seeds 25 --seed-start 25); --report stitches the "
+                         "chunks back into one row")
     ap.add_argument("--layers", type=int, nargs="+", default=list(DV_LAYERS),
                     help=f"stage D layer counts (default {list(DV_LAYERS)}, "
                          "matching vqe_resource_comparison)")
@@ -490,8 +533,9 @@ def main():  # pragma: no cover - driver
             depths = [args.depth] if args.depth is not None else args.depths
             for it in sorted(args.iters):
                 for d in sorted(depths):
+                    sfx = "" if args.seed_start == 0 else f"_from{args.seed_start}"
                     done = (OUT_DIR / f"multi_n{args.size}_d{d}_it{it}"
-                            f"_s{args.seeds}.npz").exists()
+                            f"_s{args.seeds}{sfx}.npz").exists()
                     m = _estimate_minutes(args.size, d, it, args.seeds)
                     total += 0 if done else m
                     print(f"  B  d={d:2d} it={it:6d} x {args.seeds} seeds "
@@ -524,7 +568,8 @@ def main():  # pragma: no cover - driver
         depths = [args.depth] if args.depth is not None else args.depths
         print(f"\n=== stage B: random starts, n={args.size}, "
               f"{args.seeds} seeds/cell ===", flush=True)
-        stage_b(args.size, depths, args.iters, args.seeds, workers, args.force)
+        stage_b(args.size, depths, args.iters, args.seeds, workers, args.force,
+                args.seed_start)
         report_multistart([args.size])
     if "d" in args.stage:
         print(f"\n=== stage D: DV arm, n={args.size}, "
