@@ -359,6 +359,79 @@ def report_dv(sizes) -> None:
                   f"{float(r['truncation']):8.2f}")
 
 
+#: A seed counts as solved only if its P(optimal) is reproduced at twice the
+#: verification cutoff. Tolerance is loose because agreement is either exact
+#: (a confined state: identical to ~1e-10) or gross (a state pressed against
+#: the ceiling, where the cutoff changes the simulated dynamics, not just the
+#: readout -- one n=12 seed moved from E=2.73 to E=13.70). There is no middle
+#: ground to calibrate against, so anything but near-exact agreement is a
+#: truncation artifact.
+CUTOFF_TOL = 1e-6
+
+
+def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
+    """Re-evaluate every stored seed at `factor` x the verification cutoff.
+
+    A converged, confined state gives identical numbers at any cutoff above it
+    -- checked here to 1e-6, and observed to agree to ten decimal places. A
+    state that pushes population toward the ceiling does not, because the
+    cutoff bounds the simulated Hilbert space rather than merely the readout.
+    So agreement is what licenses the claim "this seed solved the problem"
+    rather than "this seed solved a truncated caricature of it".
+
+    Cheap enough to apply to everything already computed: the cells store their
+    converged parameters, so this is one forward pass per seed (~0.5 s at n=12)
+    against the ~2000 s that produced it. Results are written back into each
+    cell as `p_optimal_hi`, `energy_hi` and `cutoff_ok`.
+    """
+    import ecd_vqe_sandia as base
+    import ecd_vqe_sandia_jax as sj
+
+    for size in sizes:
+        for path in sorted(OUT_DIR.glob(f"multi_n{size}_*.npz")):
+            d = dict(np.load(path, allow_pickle=False))
+            if "cutoff_ok" in d and not force:
+                print(f"[cache] {path.name}", flush=True)
+                continue
+            if "params" not in d:
+                print(f"[skip]  {path.name}: no stored parameters", flush=True)
+                continue
+
+            base.set_problem(PROBLEMS[size])
+            depth = int(d["depth"])
+            f0, f1 = sj.resolve_fock(None)
+            hi = (f0 * factor, f1 * factor)
+            h_hi, iw_hi = sj.build_cost_diagonal_jax(hi, base.WIRES, 5.0)
+            qn_hi = sj.get_qnode(hi, base.WIRES)
+            tq, tm0, tm1 = base.TARGET
+
+            params = np.asarray(d["params"])
+            mask_hi = np.asarray(iw_hi).astype(float)
+            p_hi, e_hi, c_hi = [], [], []
+            for row in params:
+                probs = np.abs(np.asarray(qn_hi(row, depth, base.WIRES))) ** 2
+                p_hi.append(float(probs[tq * hi[0] * hi[1] + tm0 * hi[1] + tm1]))
+                e_hi.append(float(np.dot(probs, np.asarray(h_hi))))
+                # Confinement re-measured in the larger space: a state that only
+                # looked confined because the old cutoff hid where it went shows
+                # up here, and is the mechanism behind a failed cutoff check.
+                c_hi.append(float(np.sum(probs * mask_hi)))
+            p_hi, e_hi, c_hi = np.array(p_hi), np.array(e_hi), np.array(c_hi)
+            p_lo = np.asarray(d["p_optimal"])
+            ok = np.abs(p_hi - p_lo) < CUTOFF_TOL
+
+            d.update({"p_optimal_hi": p_hi, "energy_hi": e_hi,
+                      "confinement_hi": c_hi, "cutoff_ok": ok,
+                      "cutoff_factor": factor})
+            tmp = path.with_suffix(".npz.tmp")
+            np.savez_compressed(tmp, **d)
+            tmp.replace(path)
+            solved = p_lo >= SUCCESS
+            print(f"[valid] {path.name}: {int(ok.sum())}/{ok.size} reproduce at "
+                  f"{hi}; of the {int(solved.sum())} solved, "
+                  f"{int((solved & ~ok).sum())} fail the check", flush=True)
+
+
 def report_multistart(sizes) -> None:
     """Success rate per (depth, budget), the number the study actually needs."""
     for size in sizes:
@@ -378,6 +451,13 @@ def report_multistart(sizes) -> None:
                                         "energy": [], "conv_0p01": []})
             for field in ("seed", "p_optimal", "energy", "conv_0p01"):
                 m[field].extend(np.asarray(c[field]).ravel().tolist())
+            # Seeds whose P(optimal) does not survive a doubled cutoff are
+            # counted separately rather than dropped: silently discarding them
+            # would make an unvalidated cell look identical to a clean one.
+            if "cutoff_ok" in c:
+                bad = (~np.asarray(c["cutoff_ok"])) & \
+                      (np.asarray(c["p_optimal"]) >= SUCCESS)
+                m["n_unsafe"] = m.get("n_unsafe", 0) + int(bad.sum())
         rows = []
         for key, m in merged.items():
             seen, keep = set(), []
@@ -392,6 +472,7 @@ def report_multistart(sizes) -> None:
                 "p_optimal": np.array(m["p_optimal"])[idx],
                 "energy": np.array(m["energy"])[idx],
                 "truncation": float(np.mean(np.array(m["conv_0p01"])[idx]) / key[1]),
+                "n_unsafe": m.get("n_unsafe", 0),
             })
         print(f"\n=== n={size} random starts ({PROBLEMS[size]}) ===")
         print(f"{'depth':>6}{'iters':>8}{'seeds':>7}{'solved':>8}{'rate':>8}"
@@ -401,13 +482,15 @@ def report_multistart(sizes) -> None:
             e = np.asarray(r["energy"])
             n = p.size
             ok = int((p >= SUCCESS).sum())
+            unsafe = int(r.get("n_unsafe", 0))
             trunc = float(r["truncation"])
             # >0.9 means the median run was still improving at the very end:
             # the budget, not the depth, is what stopped it.
             note = "BINDING" if trunc > 0.9 else "adequate" if trunc < 0.75 else "marginal"
+            flag = "" if unsafe == 0 else f"  [{unsafe} fail cutoff check]"
             print(f"{int(r['depth']):6d}{int(r['n_iters']):8d}{n:7d}{ok:8d}"
                   f"{ok / n:8.0%}{p.max():8.4f}{np.median(p):8.4f}"
-                  f"{np.median(e):10.3f}{trunc:8.2f}  {note}")
+                  f"{np.median(e):10.3f}{trunc:8.2f}  {note}{flag}")
         best = max(rows, key=lambda r: ((np.asarray(r["p_optimal"]) >= SUCCESS).mean(),
                                         -int(r["depth"]), -int(r["n_iters"])))
         bp = np.asarray(best["p_optimal"])
@@ -475,6 +558,10 @@ def main():  # pragma: no cover - driver
                     help="a=deterministic depth grid, b=random-start grid, "
                          "d=DV arm at the same budgets (keeps the comparison "
                          "optimizer-matched)")
+    ap.add_argument("--validate", action="store_true",
+                    help="re-evaluate every stored seed at twice the "
+                         "verification cutoff and record whether its P(optimal) "
+                         "survives; run once after new cells land")
     ap.add_argument("--report", action="store_true",
                     help="print the grid found so far and exit")
     ap.add_argument("--sizes", type=int, nargs="+", default=[8, 10, 12],
@@ -509,6 +596,12 @@ def main():  # pragma: no cover - driver
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.validate:
+        backend.select(args.device)
+        validate_cutoff(args.sizes, force=args.force)
+        report_multistart(args.sizes)
+        return
 
     if args.report:
         report(args.sizes)
