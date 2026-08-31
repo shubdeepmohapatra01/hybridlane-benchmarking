@@ -252,14 +252,18 @@ def multistart_cell(size, depth, n_iters, n_seeds, workers, force=False,
         "params": np.array([r["params"] for r in res]),
         "history": np.array([_downsample(r["history"]) for r in res]),
         "history_len": [len(r["history"]) for r in res],
-        # fraction of the budget consumed before the run stopped improving
-        "truncation": float(np.mean(conv / n_iters)),
+        # Fraction of the iteration budget consumed before the run stopped
+        # improving. Deliberately NOT called "truncation": in this group that
+        # word means the oscillator population in the highest k Fock levels,
+        # i.e. whether the cutoff is wide enough -- an unrelated quantity,
+        # recorded here as `tail_population`.
+        "budget_used": float(np.mean(conv / n_iters)),
         "wall_min": (time.time() - t0) / 60,
     }
     np.savez_compressed(path, **out)
     n_ok = int((p_opt >= SUCCESS).sum())
     print(f"[compute] d={depth:2d} it={n_iters:6d}  {n_ok}/{n_seeds} solved, "
-          f"best P(opt)={p_opt.max():.4f}, truncation={out['truncation']:.2f} "
+          f"best P(opt)={p_opt.max():.4f}, budget_used={out['budget_used']:.2f} "
           f"({out['wall_min']:.1f} min)", flush=True)
     return out
 
@@ -322,13 +326,13 @@ def dv_cell(size, layers, n_iters, n_seeds, workers, force=False) -> dict | None
         "conv_1p0": [r["convergence_iters"]["1.0"] for r in res],
         "conv_0p1": [r["convergence_iters"]["0.1"] for r in res],
         "conv_0p01": conv,
-        "truncation": float(np.mean(conv / n_iters)),
+        "budget_used": float(np.mean(conv / n_iters)),
         "wall_min": (time.time() - t0) / 60,
     }
     np.savez_compressed(path, **out)
     n_ok = int((p_opt >= SUCCESS).sum())
     print(f"[compute] DV L={layers:2d} it={n_iters:6d}  {n_ok}/{n_seeds} solved, "
-          f"best P(opt)={p_opt.max():.4f}, truncation={out['truncation']:.2f} "
+          f"best P(opt)={p_opt.max():.4f}, budget_used={out['budget_used']:.2f} "
           f"({out['wall_min']:.1f} min)", flush=True)
     return out
 
@@ -349,14 +353,14 @@ def report_dv(sizes) -> None:
         rows = [dict(np.load(c, allow_pickle=False)) for c in cells]
         print(f"\n=== n={size} DV arm ({PROBLEMS[size]}) ===")
         print(f"{'layers':>7}{'n_par':>7}{'iters':>8}{'seeds':>7}{'solved':>8}"
-              f"{'rate':>8}{'bestP':>8}{'trunc':>8}")
+              f"{'rate':>8}{'bestP':>8}{'used':>8}")
         for r in sorted(rows, key=lambda r: (int(r["layers"]), int(r["n_iters"]))):
             p = np.asarray(r["p_optimal"])
             npar = int(np.asarray(r["n_params"])[0])
             ok = int((p >= SUCCESS).sum())
             print(f"{int(r['layers']):7d}{npar:7d}{int(r['n_iters']):8d}{p.size:7d}"
                   f"{ok:8d}{ok / p.size:8.0%}{p.max():8.4f}"
-                  f"{float(r['truncation']):8.2f}")
+                  f"{float(r.get('budget_used', r.get('truncation', np.nan))):8.2f}")
 
 
 #: A seed counts as solved only if its P(optimal) is reproduced at twice the
@@ -367,6 +371,10 @@ def report_dv(sizes) -> None:
 #: ground to calibrate against, so anything but near-exact agreement is a
 #: truncation artifact.
 CUTOFF_TOL = 1e-6
+
+#: How many Fock levels below the original cutoff count as "the tail", for the
+#: group's truncation measure. Population here means the cutoff was too narrow.
+TAIL_LEVELS = 4
 
 
 def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
@@ -407,7 +415,7 @@ def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
 
             params = np.asarray(d["params"])
             mask_hi = np.asarray(iw_hi).astype(float)
-            p_hi, e_hi, c_hi = [], [], []
+            p_hi, e_hi, c_hi, tail = [], [], [], []
             for row in params:
                 probs = np.abs(np.asarray(qn_hi(row, depth, base.WIRES))) ** 2
                 p_hi.append(float(probs[tq * hi[0] * hi[1] + tm0 * hi[1] + tm1]))
@@ -416,13 +424,21 @@ def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
                 # looked confined because the old cutoff hid where it went shows
                 # up here, and is the mechanism behind a failed cutoff check.
                 c_hi.append(float(np.sum(probs * mask_hi)))
+                # Truncation in this group's sense: how much population sits in
+                # the top TAIL_LEVELS Fock levels of each mode at the *original*
+                # cutoff. Non-negligible here means that cutoff was too narrow,
+                # independently of whether P(optimal) happened to survive.
+                g = probs.reshape(2, hi[0], hi[1])
+                tail.append(float(g[:, f0 - TAIL_LEVELS:f0, :].sum()
+                                  + g[:, :, f1 - TAIL_LEVELS:f1].sum()))
             p_hi, e_hi, c_hi = np.array(p_hi), np.array(e_hi), np.array(c_hi)
+            tail = np.array(tail)
             p_lo = np.asarray(d["p_optimal"])
             ok = np.abs(p_hi - p_lo) < CUTOFF_TOL
 
             d.update({"p_optimal_hi": p_hi, "energy_hi": e_hi,
                       "confinement_hi": c_hi, "cutoff_ok": ok,
-                      "cutoff_factor": factor})
+                      "tail_population": tail, "cutoff_factor": factor})
             # `savez_compressed` appends `.npz` unless the name already ends
             # in it, so the temp name has to carry the extension itself or the
             # rename below chases a file that was never written under that name.
@@ -432,7 +448,8 @@ def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
             solved = p_lo >= SUCCESS
             print(f"[valid] {path.name}: {int(ok.sum())}/{ok.size} reproduce at "
                   f"{hi}; of the {int(solved.sum())} solved, "
-                  f"{int((solved & ~ok).sum())} fail the check", flush=True)
+                  f"{int((solved & ~ok).sum())} fail the check; "
+                  f"max tail population {tail.max():.2e}", flush=True)
 
 
 def report_multistart(sizes) -> None:
@@ -452,6 +469,8 @@ def report_multistart(sizes) -> None:
             m = merged.setdefault(key, {"depth": key[0], "n_iters": key[1],
                                         "seed": [], "p_optimal": [],
                                         "energy": [], "conv_0p01": []})
+            # Cells written before the rename carry `truncation`; both are the
+            # same quantity, recomputed here from conv_0p01 anyway.
             for field in ("seed", "p_optimal", "energy", "conv_0p01"):
                 m[field].extend(np.asarray(c[field]).ravel().tolist())
             # Seeds whose P(optimal) does not survive a doubled cutoff are
@@ -474,26 +493,26 @@ def report_multistart(sizes) -> None:
                 "seed": np.array(m["seed"])[idx],
                 "p_optimal": np.array(m["p_optimal"])[idx],
                 "energy": np.array(m["energy"])[idx],
-                "truncation": float(np.mean(np.array(m["conv_0p01"])[idx]) / key[1]),
+                "budget_used": float(np.mean(np.array(m["conv_0p01"])[idx]) / key[1]),
                 "n_unsafe": m.get("n_unsafe", 0),
             })
         print(f"\n=== n={size} random starts ({PROBLEMS[size]}) ===")
         print(f"{'depth':>6}{'iters':>8}{'seeds':>7}{'solved':>8}{'rate':>8}"
-              f"{'bestP':>8}{'medP':>8}{'medE':>10}{'trunc':>8}  budget")
+              f"{'bestP':>8}{'medP':>8}{'medE':>10}{'used':>8}  budget")
         for r in sorted(rows, key=lambda r: (int(r["depth"]), int(r["n_iters"]))):
             p = np.asarray(r["p_optimal"])
             e = np.asarray(r["energy"])
             n = p.size
             ok = int((p >= SUCCESS).sum())
             unsafe = int(r.get("n_unsafe", 0))
-            trunc = float(r["truncation"])
+            used = float(r["budget_used"])
             # >0.9 means the median run was still improving at the very end:
             # the budget, not the depth, is what stopped it.
-            note = "BINDING" if trunc > 0.9 else "adequate" if trunc < 0.75 else "marginal"
+            note = "BINDING" if used > 0.9 else "adequate" if used < 0.75 else "marginal"
             flag = "" if unsafe == 0 else f"  [{unsafe} fail cutoff check]"
             print(f"{int(r['depth']):6d}{int(r['n_iters']):8d}{n:7d}{ok:8d}"
                   f"{ok / n:8.0%}{p.max():8.4f}{np.median(p):8.4f}"
-                  f"{np.median(e):10.3f}{trunc:8.2f}  {note}{flag}")
+                  f"{np.median(e):10.3f}{used:8.2f}  {note}{flag}")
         best = max(rows, key=lambda r: ((np.asarray(r["p_optimal"]) >= SUCCESS).mean(),
                                         -int(r["depth"]), -int(r["n_iters"])))
         bp = np.asarray(best["p_optimal"])
