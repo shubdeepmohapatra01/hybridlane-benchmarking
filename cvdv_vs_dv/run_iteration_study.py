@@ -423,7 +423,10 @@ def validate_cutoff(sizes, factor: int = 2, force: bool = False) -> None:
             d.update({"p_optimal_hi": p_hi, "energy_hi": e_hi,
                       "confinement_hi": c_hi, "cutoff_ok": ok,
                       "cutoff_factor": factor})
-            tmp = path.with_suffix(".npz.tmp")
+            # `savez_compressed` appends `.npz` unless the name already ends
+            # in it, so the temp name has to carry the extension itself or the
+            # rename below chases a file that was never written under that name.
+            tmp = path.with_name(path.stem + ".tmp.npz")
             np.savez_compressed(tmp, **d)
             tmp.replace(path)
             solved = p_lo >= SUCCESS
