@@ -106,10 +106,14 @@ MIN_PER_DEPTH_KILOITER = {8: 0.060, 10: 0.060, 12: 0.060, 16: 0.107}
 
 #: Same idea for the DV arm, per (1000 iterations x seed), independent of layer
 #: count -- the cost is dominated by the 2**n statevector, not the parameter
-#: count. n=8 is measured (350 jobs at 8000 iters in 210.8 min -> 0.075); the
-#: larger sizes are extrapolated by state size and are rough, since the DV
-#: sweeps at 12 and 16 have never completed.
-DV_MIN_PER_KILOITER = {8: 0.075, 10: 0.15, 12: 0.30, 16: 1.2}
+#: count. n=8 is measured (350 jobs at 8000 iters in 210.8 min -> 0.075).
+#: Everything else is extrapolated by state size and is rough: 4 and 7 are
+#: floored rather than scaled, because at a 16- and 128-amplitude statevector
+#: the per-call overhead dominates the arithmetic, and 12 and 16 have never
+#: completed a sweep to measure -- the first attempt at each is what the OOM
+#: killed.
+DV_MIN_PER_KILOITER = {4: 0.03, 7: 0.05, 8: 0.075, 10: 0.15,
+                       12: 0.30, 16: 1.2}
 
 
 def cell_path(size: int, depth: int, n_iters: int, beta_tag: str) -> Path:
