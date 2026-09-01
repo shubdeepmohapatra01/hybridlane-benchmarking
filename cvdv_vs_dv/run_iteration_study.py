@@ -95,14 +95,23 @@ TAIL_FRACTION = 0.2    # last fifth of a run defines its "still descending?" tai
 ENERGY_TOL = 2.0
 
 #: Wall-clock minutes per (depth x 1000 iterations x beta), measured from the
-#: production runs. The n=12 deterministic sweep took 123.8 min over depths
-#: (6,8,10,12,14,16,20) at 8000 iters and three betas -> 0.060; its multistart
-#: independently gives 8.29 min per depth-16 run at one beta -> 0.065, so the
-#: linear model holds across both stages. n=8, n=10 and n=12 share it because
-#: their Fock cutoff products are identical (128x64, 64x128, 128x64 = 8192);
-#: n=16 is 512x256 = 131072, i.e. 16x the state, and gets its own rate from its
-#: 143.2 min sweep.
-MIN_PER_DEPTH_KILOITER = {8: 0.060, 10: 0.060, 12: 0.060, 16: 0.107}
+#: completed multistart cells at 32000 iterations:
+#:
+#:     n=8   depth 12  18.31 min/seed -> 0.048
+#:     n=10  depth 14  21.48 min/seed -> 0.048
+#:     n=12  depth 20  33.55 min/seed -> 0.052
+#:
+#: Note what this is *not*: proportional to state size. Those three instances
+#: span 4096, 8192 and 16384 optimization states -- a 4x range -- for a 9%
+#: spread in cost per depth-iteration. The GPU is bound by kernel-launch
+#: latency over the scan, not by the arithmetic, so a larger register is very
+#: nearly free and an earlier estimate that scaled by state count was wrong.
+#: The same reasoning floors 4 and 7 rather than scaling them down: their
+#: statevectors are 4x and 2x smaller than n=8's and buy almost nothing.
+#: Values here are rounded up ~20% so they size a --time request, not a
+#: benchmark. n=16 is the exception, from its 143.2 min deterministic sweep.
+MIN_PER_DEPTH_KILOITER = {4: 0.045, 7: 0.045, 8: 0.060, 10: 0.060,
+                          12: 0.060, 16: 0.107}
 
 #: Same idea for the DV arm, per (1000 iterations x seed), independent of layer
 #: count -- the cost is dominated by the 2**n statevector, not the parameter
